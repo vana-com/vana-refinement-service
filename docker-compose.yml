@@ -1,0 +1,30 @@
+services:
+  refiner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vanaorg/vana-refiner:${TAG:-latest}
+    container_name: vana-refiner
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "30"
+    env_file:
+      - .env
+    volumes:
+      - ${PWD}/.env:/app/.env:ro
+      - ${HOME}/.vana/wallets:/root/.vana/wallets:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}:${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}
+    expose:
+      - "8091"
+    ports:
+      - "8000:8091"
+    restart: always
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8091" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s

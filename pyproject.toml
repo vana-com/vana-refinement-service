@@ -1,0 +1,14 @@
+[tool.poetry]
+name = "vana-refiner"
+version = "0.1.0"
+description = "Refinement service for refining files using Vana's Data Registry."
+authors = ["Kahtaf Alam <kahtaf@opendatalabs.xyz>"]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+docker = "^7.1.0"
+vana = "^0.43.0"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
