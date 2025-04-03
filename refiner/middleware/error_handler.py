@@ -2,13 +2,13 @@ import vana
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from refiner.errors.exceptions import RefinementServiceBaseException
+from refiner.errors.exceptions import RefinementBaseException
 
 
 async def error_handler_middleware(request: Request, call_next):
     try:
         return await call_next(request)
-    except RefinementServiceBaseException as exc:
+    except RefinementBaseException as exc:
         vana.logging.error(f"Handled error: {exc.error_code} - {exc.detail}")
         return JSONResponse(
             status_code=exc.status_code,

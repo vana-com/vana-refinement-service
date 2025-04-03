@@ -8,7 +8,7 @@ import vana
 
 from refiner.errors.exceptions import ContainerTimeoutError
 from refiner.middleware.log_request_id_handler import request_id_context
-from refiner.models.models import Artifact, DockerRun, CompletedJobRun
+from refiner.models.models import DockerRun
 from refiner.utils.docker_cache import DockerImageCache
 
 # Initialize the image cache as a module-level singleton
@@ -44,8 +44,7 @@ def get_docker_client():
     return client
 
 
-def run_signed_container(job_run: CompletedJobRun, image_url: str, environment: dict, request_id: str = None,
-                         job_container_timeout_seconds: int = None) -> DockerRun:
+def run_signed_container(image_url: str, environment: dict, request_id: str = None) -> DockerRun:
     """
     Synchronous version of run_signed_container that runs the container and waits for completion.
 
@@ -54,7 +53,6 @@ def run_signed_container(job_run: CompletedJobRun, image_url: str, environment: 
         image_url: URL of the container image
         environment: Environment variables to pass to the container
         request_id: Optional request ID for logging context
-        job_container_timeout_seconds: Optional container timeout in seconds (otherwise env `JOB_CONTAINER_TIMEOUT_SECONDS` used)
 
     Returns:
         DockerRun: Result of running the container including logs and exit code
@@ -66,8 +64,8 @@ def run_signed_container(job_run: CompletedJobRun, image_url: str, environment: 
     client = get_docker_client()
     cache = get_image_cache()
 
-    # Get container timeout from environment variable (default 180 seconds)
-    container_timeout = int(job_container_timeout_seconds or os.getenv('JOB_CONTAINER_TIMEOUT_SECONDS', '180'))
+    # Get container timeout from environment variable (default 10 seconds)
+    container_timeout = int(os.getenv('CONTAINER_TIMEOUT_SECONDS', '10'))
     vana.logging.debug(f"Container timeout set to {container_timeout} seconds")
 
     # Get image from cache or download
@@ -78,7 +76,7 @@ def run_signed_container(job_run: CompletedJobRun, image_url: str, environment: 
         raise ValueError(f"Failed to get Docker image from {image_url}")
 
     # Generate a unique container name
-    container_name = f"job-{job_run.run_id}-{image_tag.split('/')[-1].split(':')[0]}-{uuid.uuid4().hex[:8]}"
+    container_name = f"refinement-{request_id}-{image_tag.split('/')[-1].split(':')[0]}-{uuid.uuid4().hex[:8]}"
     docker_run = DockerRun(
         container_name=container_name,
         exit_code=None,
@@ -87,12 +85,16 @@ def run_signed_container(job_run: CompletedJobRun, image_url: str, environment: 
         terminated_at=None,
     )
 
+    # Generate unique names for input and output volumes
+    input_volume_name = f"input-{uuid.uuid4().hex}"
+    output_volume_name = f"output-{uuid.uuid4().hex}"
+    input_volume = client.volumes.create(input_volume_name)
+    output_volume = client.volumes.create(output_volume_name)
+
     try:
-        input_dir_path = str(job_run.input_dir.resolve())
-        output_dir_path = str(job_run.output_dir.resolve())
         volumes = {
-            input_dir_path: {'bind': '/mnt/input', 'mode': 'rw'},
-            output_dir_path: {'bind': '/mnt/output', 'mode': 'rw'},
+            input_volume_name: {'bind': '/input', 'mode': 'rw'},
+            output_volume_name: {'bind': '/output', 'mode': 'rw'},
         }
 
         # Create (but don't start) the container

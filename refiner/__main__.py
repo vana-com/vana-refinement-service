@@ -15,7 +15,7 @@ from starlette.middleware.cors import CORSMiddleware
 from refiner.middleware.error_handler import error_handler_middleware
 from refiner.middleware.log_request_id_handler import add_request_id_middleware, request_id_context
 from refiner.models.models import RefinementRequest, RefinementResponse
-from refiner.services import refine
+from refiner.services.refine import refine
 from refiner.utils.config import add_args, check_config, default_config
 from refiner.utils.logfilter import RequestIdFilter
 

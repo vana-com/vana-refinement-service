@@ -143,7 +143,7 @@ class DockerImageCache:
         image_path = self.cache_dir / f"{url_hash}.tar"
 
         # Generate a unique image tag based on URL
-        unique_tag = f"job-{url_hash[:12]}:latest"
+        unique_tag = f"refinement-{url_hash[:12]}:latest"
 
         with self.lock:
             # Check if image exists in cache and is not expired

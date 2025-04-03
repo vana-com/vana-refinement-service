@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException, status
 
 
-class RefinementServiceBaseException(HTTPException):
+class RefinementBaseException(HTTPException):
     """Base exception class for refinement service errors"""
 
     def __init__(
@@ -27,7 +27,7 @@ class RefinementServiceBaseException(HTTPException):
         )
 
 
-class FileDownloadError(RefinementServiceBaseException):
+class FileDownloadError(RefinementBaseException):
     def __init__(self, file_url: str, error: str, file_id: Optional[int] = None):
         details = {
             "url": file_url,
@@ -44,7 +44,7 @@ class FileDownloadError(RefinementServiceBaseException):
         )
 
 
-class FileDecryptionError(RefinementServiceBaseException):
+class FileDecryptionError(RefinementBaseException):
     def __init__(self, error: str, file_id: Optional[int] = None):
         details = {"error": error}
         if file_id is not None:
@@ -58,7 +58,7 @@ class FileDecryptionError(RefinementServiceBaseException):
         )
 
 
-class InvalidPermissionError(RefinementServiceBaseException):
+class InvalidPermissionError(RefinementBaseException):
     def __init__(self, file_id: int, address: str, reason: str):
         super().__init__(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -72,7 +72,7 @@ class InvalidPermissionError(RefinementServiceBaseException):
         )
 
 
-class ContainerExecutionError(RefinementServiceBaseException):
+class ContainerExecutionError(RefinementBaseException):
     def __init__(self, container_name: str, exit_code: int, logs: str):
         super().__init__(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -86,7 +86,7 @@ class ContainerExecutionError(RefinementServiceBaseException):
         )
 
 
-class IPFSUploadError(RefinementServiceBaseException):
+class IPFSUploadError(RefinementBaseException):
     def __init__(self, error_message: str):
         super().__init__(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -98,7 +98,7 @@ class IPFSUploadError(RefinementServiceBaseException):
         )
 
 
-class CryptographyError(RefinementServiceBaseException):
+class CryptographyError(RefinementBaseException):
     def __init__(self, operation: str, error: str):
         super().__init__(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -111,7 +111,7 @@ class CryptographyError(RefinementServiceBaseException):
         )
 
 
-class ContainerTimeoutError(RefinementServiceBaseException):
+class ContainerTimeoutError(RefinementBaseException):
     def __init__(self, container_name: str, timeout: int):
         super().__init__(
             status_code=status.HTTP_408_REQUEST_TIMEOUT,
