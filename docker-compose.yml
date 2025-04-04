@@ -10,16 +10,16 @@ services:
       options:
         max-size: "100m"
         max-file: "30"
-    environment:
-      - CHAIN_NETWORK=${CHAIN_NETWORK}
-      - CHAIN_NETWORK_ENDPOINT=${CHAIN_NETWORK_ENDPOINT}
-      - HOTKEY_MNEMONIC=${HOTKEY_MNEMONIC}
-      - QUERY_ENGINE_ACCOUNT=${QUERY_ENGINE_ACCOUNT}
     volumes:
       - ${PWD}/.env:/app/.env:ro
       - ${HOME}/.vana/wallets:/root/.vana/wallets:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}:${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}
+    environment:
+      - CHAIN_NETWORK=${CHAIN_NETWORK}
+      - CHAIN_NETWORK_ENDPOINT=${CHAIN_NETWORK_ENDPOINT}
+      - HOTKEY_MNEMONIC=${HOTKEY_MNEMONIC}
+      - QUERY_ENGINE_ACCOUNT=${QUERY_ENGINE_ACCOUNT}
     expose:
       - "8091"
     ports:

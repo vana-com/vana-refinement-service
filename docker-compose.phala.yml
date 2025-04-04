@@ -1,0 +1,75 @@
+services:
+  vana-refinement-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vanaorg/vana-refinement-service:9b00285a04a2eaf6a664ea51fb3be03db02a5b8b
+    container_name: vana-refinement-service
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "30"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}:${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}
+    environment:
+      - CHAIN_NETWORK=${CHAIN_NETWORK}
+      - CHAIN_NETWORK_ENDPOINT=${CHAIN_NETWORK_ENDPOINT}
+      - HOTKEY_MNEMONIC=${HOTKEY_MNEMONIC}
+      - QUERY_ENGINE_ACCOUNT=${QUERY_ENGINE_ACCOUNT}
+    expose:
+      - "8091"
+    ports:
+      - "8000:8091"
+    restart: always
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8091" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - vana-network
+  # log viewer with dozzle
+  setup:
+    image: busybox
+    restart: "no"
+    volumes:
+      - dozzle-data:/dozzle-data/
+    environment:
+      - DOZZLA_USERS=${DOZZLA_USERS}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo $${DOZZLA_USERS} | base64 -d > /dozzle-data/users.yml || true
+  dozzle:
+    container_name: dozzle
+    image: amir20/dozzle:latest
+    depends_on:
+      - setup
+    environment:
+      - DOZZLE_AUTH_PROVIDER=simple
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - dozzle-data:/data
+    ports:
+      - 8080:8080
+  # Grafana metrics with node_exporter
+  node_exporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: node_exporter
+    command:
+      - "--path.rootfs=/host"
+    network_mode: host
+    pid: host
+    restart: unless-stopped
+    volumes:
+      - "/:/host:ro,rslave"
+networks:
+  vana-network:
+    name: vana-network
+    driver: bridge
+volumes:
+  dozzle-data:

@@ -2,9 +2,10 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install Poetry and curl for healthcheck
+# Install Poetry, curl for healthcheck, and gnupg for decryption
 RUN apt-get update \
-    && apt-get install -y curl \
+    && apt-get install -y --no-install-recommends curl gnupg \
+    && rm -rf /var/lib/apt/lists/* \
     && pip install poetry
 
 # Copy poetry configuration files
