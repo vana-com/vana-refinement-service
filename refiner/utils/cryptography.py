@@ -28,19 +28,19 @@ def decrypt_file(encrypted_file_path: str, encryption_key: str) -> str:
     """
     gpg = gnupg.GPG()
     base_temp_dir = os.path.dirname(encrypted_file_path)  # Directory containing the encrypted file
-    input_dir = os.path.join(base_temp_dir, 'input')      # Target 'input' subdirectory
+    input_dir = os.path.join(base_temp_dir, 'input')  # Target 'input' subdirectory
 
     # Create the 'input' subdirectory if it doesn't exist
     try:
         os.makedirs(input_dir, exist_ok=True)
         vana.logging.info(f"Ensured input directory exists: {input_dir}")
     except OSError as e:
-         raise FileDecryptionError(error=f"Could not create input directory '{input_dir}': {e}")
+        raise FileDecryptionError(error=f"Could not create input directory '{input_dir}': {e}")
 
     _, file_extension = os.path.splitext(encrypted_file_path)
     # Keep a simple name for the decrypted file inside the input dir
     decrypted_filename = f"decrypted_file{file_extension}"
-    decrypted_file_path = os.path.join(input_dir, decrypted_filename) # Path inside input/
+    decrypted_file_path = os.path.join(input_dir, decrypted_filename)  # Path inside input/
 
     try:
         with open(encrypted_file_path, 'rb') as encrypted_file:

@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "vana-refiner"
+name = "vana-refinement-service"
 version = "0.1.0"
 description = "Refinement service for refining files using Vana's Data Registry."
 authors = ["Kahtaf Alam <kahtaf@opendatalabs.xyz>"]
