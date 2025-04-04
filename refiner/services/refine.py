@@ -90,7 +90,7 @@ def refine(
         docker_run_result = run_signed_container(
             image_url=refiner.get('refinement_instruction_url'),
             environment=environment,
-            input_dir_host_path=input_dir_host_path,  # Pass the host path to the input dir
+            input_file_path=decrypted_file_path,
             request_id=request_id
         )
         vana.logging.info(

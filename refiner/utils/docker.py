@@ -1,6 +1,8 @@
 import os
 import uuid
 import json
+import io
+import tarfile
 from datetime import datetime
 
 import docker
@@ -48,18 +50,16 @@ def get_docker_client():
 def run_signed_container(
     image_url: str,
     environment: dict,
-    input_dir_host_path: str,
+    input_file_path: str,
     request_id: str
 ) -> DockerRun:
     """
-    Synchronous version of run_signed_container that runs the container and waits for completion.
-    Mounts a host directory to /input and a named volume to /output.
-    Retrieves output.json from the output volume and parses it.
-
+    Runs a container with the given image and copies the input file directly into it.
+    
     Args:
         image_url: URL of the container image.
         environment: Environment variables to pass to the container.
-        input_dir_host_path: Absolute path on the host containing input files to mount to /input.
+        input_file_path: Path to the file to copy into the container's /input directory.
         request_id: Request ID for logging context.
 
     Returns:
@@ -92,16 +92,15 @@ def run_signed_container(
         output_data=None
     )
 
+    input_volume_name = f"input-{uuid.uuid4().hex}"
     output_volume_name = f"output-{uuid.uuid4().hex}"
-    output_volume = None
+    input_volume = client.volumes.create(input_volume_name)
+    output_volume = client.volumes.create(output_volume_name)
     container = None
 
     try:
-        output_volume = client.volumes.create(output_volume_name)
-        vana.logging.info(f"Created output volume: {output_volume_name}")
-
         volumes = {
-            input_dir_host_path: {'bind': '/input', 'mode': 'rw'},
+            input_volume_name: {'bind': '/input', 'mode': 'rw'},
             output_volume_name: {'bind': '/output', 'mode': 'rw'},
         }
         vana.logging.info(f"Using volumes: {volumes}")
@@ -116,6 +115,17 @@ def run_signed_container(
 
         container.start()
         vana.logging.info(f"Started container {container_name} from image {image_tag}")
+        
+        # Copy the input file to the container
+        with open(input_file_path, 'rb') as file_data:
+            tar_buffer = io.BytesIO()
+            with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
+                file_info = tarfile.TarInfo(name=os.path.basename(input_file_path))
+                file_info.size = os.path.getsize(input_file_path)
+                tar.addfile(file_info, file_data)
+            tar_buffer.seek(0)
+            client.api.put_archive(container.id, '/input', tar_buffer.getvalue())
+        vana.logging.info(f"Successfully copied file to container's /input directory")
 
         try:
             result = container.wait(timeout=container_timeout)
