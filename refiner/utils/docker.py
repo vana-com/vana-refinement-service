@@ -44,20 +44,25 @@ def get_docker_client():
     return client
 
 
-def run_signed_container(image_url: str, environment: dict, request_id: str = None) -> DockerRun:
+def run_signed_container(
+    image_url: str,
+    environment: dict,
+    input_dir_host_path: str,
+    request_id: str
+) -> DockerRun:
     """
     Synchronous version of run_signed_container that runs the container and waits for completion.
+    Mounts a host directory to /input and a named volume to /output.
 
     Args:
-        job_run: Job run metadata with run uuid, input and output directories, ...
-        image_url: URL of the container image
-        environment: Environment variables to pass to the container
-        request_id: Optional request ID for logging context
+        image_url: URL of the container image.
+        environment: Environment variables to pass to the container.
+        input_dir_host_path: Absolute path on the host containing input files to mount to /input.
+        request_id: Request ID for logging context.
 
     Returns:
-        DockerRun: Result of running the container including logs and exit code
+        DockerRun: Result of running the container including logs and exit code.
     """
-    # Set request ID in context if provided
     if request_id:
         request_id_context.set(request_id)
 
@@ -85,19 +90,20 @@ def run_signed_container(image_url: str, environment: dict, request_id: str = No
         terminated_at=None,
     )
 
-    # Generate unique names for input and output volumes
-    input_volume_name = f"input-{uuid.uuid4().hex}"
     output_volume_name = f"output-{uuid.uuid4().hex}"
-    input_volume = client.volumes.create(input_volume_name)
-    output_volume = client.volumes.create(output_volume_name)
+    output_volume = None
+    container = None
 
     try:
+        output_volume = client.volumes.create(output_volume_name)
+        vana.logging.info(f"Created output volume: {output_volume_name}")
+
         volumes = {
-            input_volume_name: {'bind': '/input', 'mode': 'rw'},
+            input_dir_host_path: {'bind': '/input', 'mode': 'rw'},
             output_volume_name: {'bind': '/output', 'mode': 'rw'},
         }
+        vana.logging.info(f"Using volumes: {volumes}")
 
-        # Create (but don't start) the container
         container = client.containers.create(
             image=image_tag,
             name=container_name,
@@ -106,8 +112,8 @@ def run_signed_container(image_url: str, environment: dict, request_id: str = No
             detach=True,
         )
 
-        # Start the container
         container.start()
+        vana.logging.info(f"Started container {container_name} from image {image_tag}")
         start_time = time.time()
 
         # Wait for the container with timeout

@@ -13,17 +13,34 @@ from refiner.errors.exceptions import FileDecryptionError
 
 def decrypt_file(encrypted_file_path: str, encryption_key: str) -> str:
     """
-    Decrypts a file using GPG encryption. Assumes the decrypted file should be placed in the same directory as the encrypted file.
-    :param encrypted_file_path: Path to the encrypted file.
-    :param encryption_key: Encryption key for decryption.
-    :return: Path to the decrypted file.
+    Decrypts a file using GPG encryption. The decrypted file is placed
+    in an 'input' subdirectory within the same directory as the encrypted file.
+
+    Args:
+        encrypted_file_path (str): Path to the encrypted file.
+        encryption_key (str): Encryption key for decryption.
+
+    Returns:
+        str: Path to the decrypted file (inside the 'input' subdirectory).
+
+    Raises:
+        FileDecryptionError: If decryption fails or the input directory cannot be created.
     """
     gpg = gnupg.GPG()
-    temp_dir = os.path.dirname(encrypted_file_path)  # Derive directory from input path
+    base_temp_dir = os.path.dirname(encrypted_file_path)  # Directory containing the encrypted file
+    input_dir = os.path.join(base_temp_dir, 'input')      # Target 'input' subdirectory
+
+    # Create the 'input' subdirectory if it doesn't exist
+    try:
+        os.makedirs(input_dir, exist_ok=True)
+        vana.logging.info(f"Ensured input directory exists: {input_dir}")
+    except OSError as e:
+         raise FileDecryptionError(error=f"Could not create input directory '{input_dir}': {e}")
+
     _, file_extension = os.path.splitext(encrypted_file_path)
-    # Ensure the output filename is distinct from the input
-    decrypted_filename = f"decrypted_{os.path.basename(encrypted_file_path).replace('encrypted_', '', 1)}"
-    decrypted_file_path = os.path.join(temp_dir, decrypted_filename)
+    # Keep a simple name for the decrypted file inside the input dir
+    decrypted_filename = f"decrypted_file{file_extension}"
+    decrypted_file_path = os.path.join(input_dir, decrypted_filename) # Path inside input/
 
     try:
         with open(encrypted_file_path, 'rb') as encrypted_file:

@@ -16,9 +16,23 @@ class RefinementResponse(BaseModel):
     add_refinement_tx_hash: str = Field(...,
                                         description="Transaction hash for the refinement being added to the Data Registry")
 
+class OffChainSchema(BaseModel):
+    name: str
+    version: str
+    description: str
+    dialect: str
+    schema: str
+    
+class Output(BaseModel):
+    refinement_url: Optional[str] = None
+    schema: Optional[OffChainSchema] = None
+    
 class DockerRun(BaseModel):
     container_name: str
     exit_code: Optional[int] = None
     logs: str = ""
     started_at: datetime
     terminated_at: Optional[datetime] = None
+    output_data: Optional[Output] = None
+
+
