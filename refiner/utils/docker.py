@@ -1,14 +1,16 @@
 import os
-import time
 import uuid
+import json
 from datetime import datetime
+from typing import Optional
 
 import docker
+import requests
 import vana
 
 from refiner.errors.exceptions import ContainerTimeoutError
 from refiner.middleware.log_request_id_handler import request_id_context
-from refiner.models.models import DockerRun
+from refiner.models.models import DockerRun, Output
 from refiner.utils.docker_cache import DockerImageCache
 
 # Initialize the image cache as a module-level singleton
@@ -53,6 +55,7 @@ def run_signed_container(
     """
     Synchronous version of run_signed_container that runs the container and waits for completion.
     Mounts a host directory to /input and a named volume to /output.
+    Retrieves output.json from the output volume and parses it.
 
     Args:
         image_url: URL of the container image.
@@ -61,7 +64,7 @@ def run_signed_container(
         request_id: Request ID for logging context.
 
     Returns:
-        DockerRun: Result of running the container including logs and exit code.
+        DockerRun: Result of running the container including logs, exit code, and parsed output data.
     """
     if request_id:
         request_id_context.set(request_id)
@@ -73,7 +76,6 @@ def run_signed_container(
     container_timeout = int(os.getenv('CONTAINER_TIMEOUT_SECONDS', '10'))
     vana.logging.debug(f"Container timeout set to {container_timeout} seconds")
 
-    # Get image from cache or download
     vana.logging.debug(f"Getting image from cache or downloading: {image_url}")
     image_tag = cache.get_image(image_url)
 
@@ -88,6 +90,7 @@ def run_signed_container(
         logs="",
         started_at=datetime.now(),
         terminated_at=None,
+        output_data=None
     )
 
     output_volume_name = f"output-{uuid.uuid4().hex}"
@@ -114,53 +117,94 @@ def run_signed_container(
 
         container.start()
         vana.logging.info(f"Started container {container_name} from image {image_tag}")
-        start_time = time.time()
 
-        # Wait for the container with timeout
         try:
-            while True:
-                # Check if container is still running
-                container.reload()
-                if container.status != 'running':
-                    break
-
-                # Check if timeout exceeded
-                if time.time() - start_time > container_timeout:
-                    vana.logging.error(f"Container {container_name} timed out after {container_timeout} seconds")
-                    container.kill()
-                    raise ContainerTimeoutError(container_name=container_name, timeout=container_timeout)
-
-                time.sleep(1)  # Wait before next check
-
-            result = container.wait()
-            docker_run.exit_code = result['StatusCode']
-
-        except ContainerTimeoutError:
-            raise
+            result = container.wait(timeout=container_timeout)
+            docker_run.exit_code = result.get('StatusCode', -1)
+            vana.logging.info(f"Container {container_name} finished with exit code {docker_run.exit_code}")
+        except requests.exceptions.ReadTimeout:
+            vana.logging.error(f"Container {container_name} timed out after {container_timeout} seconds. Killing container.")
+            try: container.kill()
+            except docker.errors.APIError as kill_e: vana.logging.error(f"Error killing timed-out container {container_name}: {kill_e}")
+            docker_run.exit_code = 137
+            raise ContainerTimeoutError(container_name=container_name, timeout=container_timeout)
         except Exception as e:
-            vana.logging.error(f"Error waiting for container: {str(e)}")
+            vana.logging.error(f"Unexpected error waiting for container {container_name}: {str(e)}")
+            docker_run.exit_code = -1
             raise
+        finally:
+             docker_run.terminated_at = datetime.now()
 
-        # Termination timestamp
-        docker_run.terminated_at = datetime.now()
+        # Retrieve logs after waiting/timeout
+        try:
+            docker_run.logs = container.logs().decode('utf-8', errors='replace')
+            vana.logging.debug(f"Container {container_name} logs retrieved.")
+        except docker.errors.APIError as log_e:
+            vana.logging.error(f"Failed to retrieve logs for container {container_name}: {log_e}")
+            docker_run.logs = "<Failed to retrieve logs>"
 
-        # Get the logs
-        docker_run.logs = container.logs().decode('utf-8')
+        # Retrieve output.json from the output volume
+        if docker_run.exit_code == 0:
+            vana.logging.info(f"Attempting to retrieve output.json from volume {output_volume_name}")
+            output_content = None
+            try:
+                # Run a temporary alpine container to cat the file from the volume
+                output_content_bytes = client.containers.run(
+                    image='alpine:latest',
+                    command=f'cat /volume_data/output.json',
+                    volumes={output_volume_name: {'bind': '/volume_data', 'mode': 'ro'}}, # Mount read-only
+                    remove=True, # Automatically remove the container when done
+                    stdout=True,
+                    stderr=True
+                )
+                output_content = output_content_bytes.decode('utf-8').strip()
+                vana.logging.info(f"Successfully retrieved content from output.json")
+                vana.logging.debug(f"output.json content: \n{output_content}")
+            except docker.errors.ContainerError as cat_err:
+                # This happens if the command fails (e.g., file not found)
+                vana.logging.warning(f"Could not retrieve output.json: Command failed in helper container. Stderr: {cat_err.stderr.decode('utf-8', errors='replace')}")
+            except Exception as read_err:
+                vana.logging.error(f"Unexpected error retrieving output.json: {read_err}")
 
-        vana.logging.info(
-            f"[Container {container_name}][Image {image_url}] Finished with exit code {docker_run.exit_code}")
+            # Parse the content if retrieved
+            if output_content:
+                try:
+                    parsed_data = json.loads(output_content)
+                    # Validate and store using the Pydantic model
+                    docker_run.output_data = Output(**parsed_data)
+                    vana.logging.info(f"Successfully parsed output.json into Output model.")
+                except json.JSONDecodeError as json_err:
+                    vana.logging.error(f"Failed to parse JSON from output.json: {json_err}")
+                    docker_run.logs += "\n[REFINER_ERROR] Failed to parse output.json content."
+                except Exception as pydantic_err: # Catch potential Pydantic validation errors
+                     vana.logging.error(f"Failed to validate output.json against Output model: {pydantic_err}")
+                     docker_run.logs += f"\n[REFINER_ERROR] Failed to validate output.json content: {pydantic_err}"
+        else:
+             vana.logging.warning(f"Skipping output.json retrieval as container exit code was {docker_run.exit_code}")
 
         return docker_run
 
     except Exception as e:
-        vana.logging.error(f"Error in run_signed_container: {str(e)}")
+        vana.logging.error(f"Error in run_signed_container setup/execution for {container_name}: {str(e)}")
+        if docker_run.exit_code is None: docker_run.exit_code = -1
         raise
 
     finally:
-        # Clean up
+        # Clean up main container and output volume
         try:
-            # Remove container
-            vana.logging.info(f"[Container {container_name}][Image {image_url}] Removing container and volumes")
-            container.remove(force=True)
+            if container:
+                vana.logging.info(f"Removing container: {container_name}")
+                container.remove(force=True)
+        except docker.errors.NotFound:
+             vana.logging.info(f"Container {container_name} already removed during cleanup.")
         except Exception as e:
-            vana.logging.error(f"[Container {container_name}][Image {image_url}] Error removing container: {str(e)}")
+            vana.logging.error(f"Error removing container {container_name}: {str(e)}")
+
+        try:
+            if output_volume:
+                vana.logging.info(f"Removing output volume: {output_volume_name}")
+                output_volume.remove(force=True)
+        except docker.errors.NotFound:
+             vana.logging.info(f"Output volume {output_volume_name} already removed during cleanup.")
+        except Exception as e:
+            vana.logging.error(f"Error removing output volume {output_volume_name}: {str(e)}")

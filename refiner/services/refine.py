@@ -73,9 +73,8 @@ def refine(
         )
         master_key_bytes = bytes.fromhex(request.encryption_key.removeprefix('0x'))
         refinement_encryption_key = '0x' + hkdf.derive(master_key_bytes).hex()
-        
-        encrypted_message, ephemeral_sk, nonce = ecies_encrypt(refiner.get('public_key'), refinement_encryption_key.encode())
-        vana.logging.info(f"Encrypted encryption key: {encrypted_message.hex()}")
+        encrypted_refinement_encryption_key, ephemeral_sk, nonce = ecies_encrypt(refiner.get('public_key'), refinement_encryption_key.encode())
+        vana.logging.info(f"Encrypted encryption key: {encrypted_refinement_encryption_key.hex()}")
 
         # 5. Run the refiner Docker container
         # Ensure environment variables are strings
@@ -102,19 +101,20 @@ def refine(
                  error_code="REFINER_CONTAINER_FAILED",
                  details={"logs": docker_run_result.logs[-1000:]} # Include last 1000 chars of logs
              )
+        vana.logging.info(f"Refined file URL: {docker_run_result.output_data.refinement_url}")
 
-        # 6. Get IPFS CID from container output
-        # TODO: Parse docker_run_result.logs or read from output volume to get the IPFS CID
-        ipfs_cid = "<parse_from_container_output>"
-        vana.logging.info(f"IPFS CID from container: {ipfs_cid}")
-
-        # 7. Call client.add_refinement_with_permission(...)
-        # TODO: Add the actual call
-        # add_refinement_tx_hash = client.add_refinement_with_permission(...) 
-        add_refinement_tx_hash = f"0x_placeholder_tx_hash_for_{ipfs_cid}" # Placeholder
+        # 6. Add refinement to the data registry
+        transaction_hash, transaction_receipt = client.add_refinement_with_permission(
+            file_id=request.file_id,
+            refiner_id=request.refiner_id,
+            url=docker_run_result.output_data.refinement_url,
+            account=os.getenv('QUERY_ENGINE_ACCOUNT'),
+            key=encrypted_refinement_encryption_key.hex()
+        )
+        vana.logging.info(f"Refinement added to the data registry with transaction hash: {transaction_hash.hex()} and receipt: {transaction_receipt}")
 
         return RefinementResponse(
-            add_refinement_tx_hash=add_refinement_tx_hash
+            add_refinement_tx_hash=transaction_hash.hex()
         )
 
     except FileDownloadError as e:
