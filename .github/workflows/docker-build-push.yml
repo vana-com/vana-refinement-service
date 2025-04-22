@@ -65,11 +65,11 @@ jobs:
 
           # Add latest tag for main branch
           if [[ "${{ steps.branch_name.outputs.branch }}" == "main" ]]; then
-            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-compute-engine:latest"
+            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:latest"
           fi
           
           if [[ "${{ github.event.inputs.stable_release }}" == "true" ]]; then
-            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-compute-engine:stable"
+            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:stable"
           fi
           
           echo "tags=$TAGS" >> $GITHUB_OUTPUT

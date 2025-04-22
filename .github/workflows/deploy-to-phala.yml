@@ -169,7 +169,7 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
           DOCKER_TAG: ${{ steps.set_image_tag.outputs.tag }}
-          PHALA_VM_NAME: ${{ github.event.inputs.vm_name || format('{0}-compute-1', needs.set-environment.outputs.environment_name) }}
+          PHALA_VM_NAME: ${{ github.event.inputs.vm_name || format('{0}-refiner-1', needs.set-environment.outputs.environment_name) }}
         run: |
           DEPLOY_ENV="${{ needs.set-environment.outputs.environment_name }}"
           echo "Deploying with image tag: $DOCKER_TAG to environment: $DEPLOY_ENV"
