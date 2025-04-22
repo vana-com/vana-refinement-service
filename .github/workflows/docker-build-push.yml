@@ -56,7 +56,6 @@ jobs:
 
           # Add branch-specific tags
           if [[ "${{ steps.branch_name.outputs.branch }}" == "main" ]]; then
-            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:latest" # Standard latest for main
             TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:main-${{ steps.current_sha.outputs.sha }}"
             TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:mainnet-latest"
           elif [[ "${{ steps.branch_name.outputs.branch }}" == "dev" ]]; then
@@ -64,11 +63,15 @@ jobs:
             TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:moksha-latest"
           fi
 
-          # Add stable tag if manually triggered
-          if [[ "${{ github.event.inputs.stable_release }}" == "true" ]]; then
-            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:stable"
+          # Add latest tag for main branch
+          if [[ "${{ steps.branch_name.outputs.branch }}" == "main" ]]; then
+            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-compute-engine:latest"
           fi
-
+          
+          if [[ "${{ github.event.inputs.stable_release }}" == "true" ]]; then
+            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-compute-engine:stable"
+          fi
+          
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
           echo "Generated tags: $TAGS"
 
