@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
   workflow_dispatch:
     inputs:
       ref:
@@ -31,7 +32,13 @@ jobs:
 
       - name: Get branch name
         id: branch_name
-        run: echo "branch=$(git rev-parse --abbrev-ref HEAD)" >> $GITHUB_OUTPUT
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            BRANCH=${GITHUB_REF#refs/heads/}
+          else
+            BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          fi
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -46,15 +53,24 @@ jobs:
         id: tags
         run: |
           TAGS="${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:${{ steps.current_sha.outputs.sha }}"
-          if [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.event.inputs.ref }}" == "main" ]]; then
-            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:latest"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:${{ steps.branch_name.outputs.branch }}-${{ steps.current_sha.outputs.sha }}"
+
+          # Add branch-specific tags
+          if [[ "${{ steps.branch_name.outputs.branch }}" == "main" ]]; then
+            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:latest" # Standard latest for main
+            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:main-${{ steps.current_sha.outputs.sha }}" # SHA-based main tag
+            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:mainnet-latest" # Environment latest for main
+          elif [[ "${{ steps.branch_name.outputs.branch }}" == "dev" ]]; then
+            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:dev-${{ steps.current_sha.outputs.sha }}" # SHA-based dev tag
+            TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:moksha-latest" # Environment latest for dev
           fi
+
+          # Add stable tag if manually triggered
           if [[ "${{ github.event.inputs.stable_release }}" == "true" ]]; then
             TAGS="$TAGS,${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:stable"
           fi
+
           echo "tags=$TAGS" >> $GITHUB_OUTPUT
+          echo "Generated tags: $TAGS"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
