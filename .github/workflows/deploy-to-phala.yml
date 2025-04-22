@@ -2,7 +2,7 @@ name: Deploy Refinement Service to Phala Cloud
 
 on:
   workflow_run:
-    workflows: ["Build and Publish Refinement Service Docker Images"]
+    workflows: ["Build and Publish Docker Images"]
     types:
       - completed
     branches:
@@ -96,17 +96,8 @@ jobs:
         id: set_image_tag
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.image_tag }}" ]]; then
-            # Use manually provided tag if not default
-            if [[ "${{ github.event.inputs.image_tag }}" != "latest" ]]; then
-               IMAGE_TAG="${{ github.event.inputs.image_tag }}"
-            else
-               # Fallback to SHA if manual tag is 'latest'
-               if [[ "${{ needs.set-environment.outputs.environment_name }}" == "mainnet" ]]; then
-                  IMAGE_TAG="main-${{ github.event.workflow_run.head_sha || github.sha }}"
-               else
-                  IMAGE_TAG="dev-${{ github.event.workflow_run.head_sha || github.sha }}"
-               fi
-            fi
+            # Use manually provided tag
+            IMAGE_TAG="${{ github.event.inputs.image_tag }}"
           elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
             # For workflow_run events, get the SHA from the triggering workflow
             if [[ "${{ needs.set-environment.outputs.environment_name }}" == "mainnet" ]]; then
@@ -115,7 +106,7 @@ jobs:
               IMAGE_TAG="dev-${{ github.event.workflow_run.head_sha }}"
             fi
           else
-            # Default fallback for push events
+            # Default fallback
             if [[ "${{ needs.set-environment.outputs.environment_name }}" == "mainnet" ]]; then
               IMAGE_TAG="main-${{ github.sha }}"
             else
@@ -152,6 +143,7 @@ jobs:
           doppler-config: ${{ needs.set-environment.outputs.environment_name }}
           inject-env-vars: true
 
+      # Debug step: List environment variables (first run only list mode)
       - name: Debug - List environment variables
         if: ${{ github.event.inputs.debug_mode == 'true' }}
         run: |
@@ -177,8 +169,7 @@ jobs:
         env:
           PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
           DOCKER_TAG: ${{ steps.set_image_tag.outputs.tag }}
-          PHALA_VM_NAME: ${{ github.event.inputs.vm_name || format('vana-refinement-service-{0}-1', needs.set-environment.outputs.environment_name) }} # <-- Set VM Name
-          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }} # Pass username for compose file
+          PHALA_VM_NAME: ${{ github.event.inputs.vm_name || format('{0}-compute-1', needs.set-environment.outputs.environment_name) }}
         run: |
           DEPLOY_ENV="${{ needs.set-environment.outputs.environment_name }}"
           echo "Deploying with image tag: $DOCKER_TAG to environment: $DEPLOY_ENV"
@@ -207,7 +198,6 @@ jobs:
             --exclude-env "CI"
             --exclude-env "GITHUB_TOKEN"
             --vm-name "$PHALA_VM_NAME"
-            # Add --include-env for specific refinement vars if needed
           )
 
           # Add VM ID parameter only if we have one
@@ -225,4 +215,4 @@ jobs:
         run: |
           echo "Deployment completed. Check Phala Cloud dashboard for VM status."
           echo "Docker images used:"
-          echo "- ${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:${{ steps.set_image_tag.outputs.tag }}"
+          echo "- vanaorg/vana-refinement-service:${{ steps.set_image_tag.outputs.tag }}"
