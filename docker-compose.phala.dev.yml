@@ -67,6 +67,19 @@ services:
     restart: unless-stopped
     volumes:
       - "/:/host:ro,rslave"
+  # SSH access to the host, only for debugging on the testnet
+  alpine-ttypd:
+    build: .
+    image: hackinglab/alpine-ttyd-bash:3.2
+    environment:
+      - AUTHOR=e1
+      - HL_USER_USERNAME=${SSH_USERNAME}
+      - HL_USER_PASSWORD=${SSH_PASSWORD}
+    ports:
+      - 7681:7681
+    volumes:
+      - /:/host
+    network_mode: host
 networks:
   vana-network:
     name: vana-network
