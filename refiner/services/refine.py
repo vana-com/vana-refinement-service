@@ -84,7 +84,9 @@ def refine(
             "FILE_ID": request.file_id,
             "FILE_URL": url,
             "FILE_OWNER_ADDRESS": ownerAddress,
-            "REFINEMENT_ENCRYPTION_KEY": refinement_encryption_key
+            "REFINEMENT_ENCRYPTION_KEY": refinement_encryption_key,
+            "INPUT_DIR": "/input",
+            "OUTPUT_DIR": "/output"
         }
 
         docker_run_result = run_signed_container(
