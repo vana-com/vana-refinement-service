@@ -118,14 +118,16 @@ def run_signed_container(
         
         # Copy the input file to the container
         with open(input_file_path, 'rb') as file_data:
+            file_size = os.path.getsize(input_file_path)
             tar_buffer = io.BytesIO()
             with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
                 file_info = tarfile.TarInfo(name=os.path.basename(input_file_path))
-                file_info.size = os.path.getsize(input_file_path)
+                file_info.size = file_size
                 tar.addfile(file_info, file_data)
             tar_buffer.seek(0)
+            archive_size = len(tar_buffer.getvalue())
             client.api.put_archive(container.id, '/input', tar_buffer.getvalue())
-        vana.logging.info(f"Successfully copied file to container's /input directory")
+        vana.logging.info(f"Successfully copied file to container's /input directory ({file_size} bytes, archive size: {archive_size} bytes)")
 
         try:
             result = container.wait(timeout=container_timeout)
