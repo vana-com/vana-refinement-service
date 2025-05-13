@@ -47,6 +47,10 @@ def refine(
         temp_dir = os.path.dirname(encrypted_file_path)  # Get the base temporary directory
         encrypted_file_size = os.path.getsize(encrypted_file_path) if os.path.exists(encrypted_file_path) else 0
         vana.logging.info(f"Successfully downloaded encrypted file to: {encrypted_file_path} ({encrypted_file_size} bytes)")
+        
+        # Check if the downloaded file exists and has content
+        if not os.path.exists(encrypted_file_path) or encrypted_file_size == 0:
+            raise FileDownloadError(f"Downloaded file is empty or does not exist: {encrypted_file_path}")
 
         # 2. Decrypt the file (will be placed in temp_dir/input/decrypted_file...)
         vana.logging.info("Starting file decryption...")
@@ -55,6 +59,10 @@ def refine(
         # The path to the directory containing the decrypted file is needed for mounting
         input_dir_host_path = os.path.dirname(decrypted_file_path)
         vana.logging.info(f"Host path for input mount: {input_dir_host_path} (decrypted file: {decrypted_file_size} bytes)")
+        
+        # Check if the decrypted file exists and has content
+        if not os.path.exists(decrypted_file_path) or decrypted_file_size == 0:
+            raise FileDecryptionError(f"Decrypted file is empty or does not exist: {decrypted_file_path}")
         
         if os.getenv('CHAIN_NETWORK') == 'moksha' and os.getenv('DEBUG_FILES_DIR'):
             debug_dir = os.getenv('DEBUG_FILES_DIR')
