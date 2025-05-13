@@ -123,6 +123,13 @@ def refine(
             )
         vana.logging.info(f"Refined file URL: {docker_run_result.output_data.refinement_url}")
 
+        if not docker_run_result.output_data and not docker_run_result.output_data.refinement_url:
+            raise RefinementBaseException(
+                status_code=400,
+                message="Refiner container did not output a refinement URL",
+                error_code="REFINER_CONTAINER_NO_OUTPUT"
+            )
+
         # 6. Add refinement to the data registry
         transaction_hash, transaction_receipt = client.add_refinement_with_permission(
             file_id=request.file_id,
