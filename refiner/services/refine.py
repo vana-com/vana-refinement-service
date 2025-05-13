@@ -141,20 +141,21 @@ def refine(
         )
 
     except FileDownloadError as e:
-        vana.logging.error(f"File download failed for file ID {request.file_id}, URL {url}: {e.error}")
+        vana.logging.error(f"File download failed for file ID {request.file_id}, URL {url}: {e.details.get('error', str(e))}")
         raise RefinementBaseException(
             status_code=500,
-            message=f"Failed to download file: {e.error}",
+            message=f"Failed to download file: {e.details.get('error', str(e))}",
             error_code="FILE_DOWNLOAD_FAILED",
             details={"file_id": request.file_id, "url": url}
         )
     except FileDecryptionError as e:
-        vana.logging.error(f"File decryption failed for file ID {request.file_id}: {e.error}")
+        error_msg = e.details.get('error', 'Invalid encryption key or corrupted file')
+        vana.logging.error(f"File decryption failed for file ID {request.file_id}: {error_msg}")
         raise RefinementBaseException(
-            status_code=500,
-            message=f"Failed to decrypt file: {e.error}",
+            status_code=400,
+            message=f"Failed to decrypt file: {error_msg}",
             error_code="FILE_DECRYPTION_FAILED",
-            details={"file_id": request.file_id}
+            details={"file_id": request.file_id, "reason": "Invalid encryption key or corrupted file"}
         )
     except Exception as e:
         vana.logging.exception(f"An unexpected error occurred during refinement for file ID {request.file_id}: {e}")
