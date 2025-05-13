@@ -89,14 +89,6 @@ def download_file(file_url: str) -> str:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
         
-        # Content-based file type detection
-        detected_extension = detect_file_type(encrypted_file_path)
-        if detected_extension != file_extension:
-            new_path = os.path.join(temp_dir, f"encrypted_file{detected_extension}")
-            os.rename(encrypted_file_path, new_path)
-            encrypted_file_path = new_path
-            vana.logging.info(f"File type detected as {detected_extension} based on content")
-        
         vana.logging.info(f"Successfully downloaded file to: {encrypted_file_path}")
         return encrypted_file_path
     except requests.exceptions.RequestException as e:
