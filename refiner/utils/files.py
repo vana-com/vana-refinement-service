@@ -8,6 +8,55 @@ import json
 
 from refiner.errors.exceptions import FileDownloadError
 
+def _extract_extension_from_content_disposition(headers):
+    """Extract file extension from Content-Disposition header."""
+    if 'Content-Disposition' not in headers:
+        return None
+    
+    content_disposition = headers['Content-Disposition']
+    if 'filename=' not in content_disposition:
+        return None
+    
+    # Parse filename from Content-Disposition header
+    filename_start = content_disposition.index('filename=') + 9
+    filename_end = content_disposition.find(';', filename_start)
+    if filename_end == -1:
+        filename_end = len(content_disposition)
+    
+    filename = content_disposition[filename_start:filename_end].strip('"\'')
+    _, ext = os.path.splitext(filename)
+    return ext if ext else None
+
+
+def _extract_extension_from_url_path(file_url):
+    """Extract file extension from URL path."""
+    parsed_url = urlparse(file_url)
+    _, ext = os.path.splitext(parsed_url.path)
+    return ext if ext else None
+
+
+def _extract_extension_from_content_type(headers):
+    """Extract file extension from Content-Type header."""
+    if 'Content-Type' not in headers:
+        return None
+    
+    content_type = headers['Content-Type'].lower().split(';')[0].strip()
+    mime_to_ext = {
+        'application/pdf': '.pdf',
+        'application/zip': '.zip',
+        'application/x-gzip': '.gz',
+        'application/x-tar': '.tar',
+        'application/x-compressed': '.zip',
+        'application/x-7z-compressed': '.7z',
+        'application/json': '.json',
+        'text/csv': '.csv',
+        'text/plain': '.txt',
+        'image/jpeg': '.jpg',
+        'image/png': '.png'
+    }
+    return mime_to_ext.get(content_type, None)
+
+
 def download_file(file_url: str) -> str:
     """
     Downloads a file from a URL into a temporary directory.
@@ -23,61 +72,58 @@ def download_file(file_url: str) -> str:
         FileDownloadError: If file download fails.
     """
     temp_dir = tempfile.mkdtemp()
-    file_extension = '.zip'  # Default extension
+    file_extension = None
 
     # Attempt to determine file extension
     try:
         response = requests.head(file_url, allow_redirects=True, timeout=10)
         response.raise_for_status()
 
-        # Check Content-Disposition header
-        if 'Content-Disposition' in response.headers:
-            content_disposition = response.headers['Content-Disposition']
-            if 'filename=' in content_disposition:
-                filename_start = content_disposition.index('filename=') + 9
-                filename_end = content_disposition.find(';', filename_start)
-                if filename_end == -1:
-                    filename_end = len(content_disposition)
-                filename = content_disposition[filename_start:filename_end].strip('"\'')
-                _, ext = os.path.splitext(filename)
-                if ext:
-                    file_extension = ext
-
+        # Check Content-Disposition header first
+        file_extension = _extract_extension_from_content_disposition(response.headers)
+        
         # If no extension from header, try URL path
-        if file_extension == '.zip':
-            parsed_url = urlparse(file_url)
-            _, ext = os.path.splitext(parsed_url.path)
-            if ext:
-                file_extension = ext
+        if file_extension is None:
+            file_extension = _extract_extension_from_url_path(file_url)
 
         # If still no extension, check Content-Type header
-        if file_extension == '.zip' and 'Content-Type' in response.headers:
-            content_type = response.headers['Content-Type'].lower().split(';')[0].strip()
-            mime_to_ext = {
-                'application/pdf': '.pdf', 'application/zip': '.zip',
-                'application/x-gzip': '.gz', 'application/x-tar': '.tar',
-                'application/x-compressed': '.zip', 'application/x-7z-compressed': '.7z',
-                'application/json': '.json', 'text/csv': '.csv',
-                'text/plain': '.txt', 'image/jpeg': '.jpg', 'image/png': '.png'
-            }
-            file_extension = mime_to_ext.get(content_type, '.zip')
+        if file_extension is None:
+            file_extension = _extract_extension_from_content_type(response.headers)
 
-    except requests.exceptions.RequestException as e:
-        vana.logging.warning(
-            f"Could not reliably determine file extension from URL '{file_url}'. Error: {e}. Using default: {file_extension}")
-        # Clean up temp dir if header check fails before download attempt
-        try:
-            os.rmdir(temp_dir)
-        except OSError:
-            pass  # Directory might not be empty or already removed
-        # Re-raise or handle as appropriate, here we just log and continue with default ext
-    except Exception as e:
-        vana.logging.warning(f"Error determining file extension for '{file_url}': {e}. Using default: {file_extension}")
-        # Clean up temp dir
-        try:
-            os.rmdir(temp_dir)
-        except OSError:
-            pass
+    except requests.exceptions.HTTPError as e:
+        # Handle HTTP errors more granularly
+        if hasattr(e.response, 'status_code'):
+            status_code = e.response.status_code
+            
+            # These errors might be HEAD-specific, so continue with fallback and let GET attempt
+            if status_code in (404, 405, 501):  # Not Found, Method Not Allowed, Not Implemented
+                vana.logging.warning(f"HEAD request failed (HTTP {status_code}) for '{file_url}'. May be HEAD-specific issue. Continuing with URL path detection.")
+                file_extension = _extract_extension_from_url_path(file_url)
+            
+            # Auth errors - might be different for HEAD vs GET, so try the download
+            elif status_code in (401, 403):  # Unauthorized, Forbidden
+                vana.logging.warning(f"HEAD request unauthorized (HTTP {status_code}) for '{file_url}'. Will attempt download anyway as GET might have different auth.")
+                file_extension = _extract_extension_from_url_path(file_url)
+            
+            # Other 4xx/5xx errors - log and continue, let the actual download attempt decide
+            else:
+                vana.logging.warning(f"HEAD request failed (HTTP {status_code}) for '{file_url}': {e}. Continuing with fallback detection.")
+                file_extension = _extract_extension_from_url_path(file_url)
+        else:
+            # HTTP error without status code - continue with fallback
+            vana.logging.warning(f"HTTP error during extension detection for '{file_url}': {e}. Continuing with fallback detection.")
+            file_extension = _extract_extension_from_url_path(file_url)
+            
+    except (requests.exceptions.RequestException, Exception) as e:
+        # Network errors, timeouts, etc. - these don't necessarily mean the download will fail
+        # so we log and continue with fallback extension detection
+        vana.logging.debug(f"Could not determine file extension from headers for '{file_url}': {e}. Using URL path fallback.")
+        file_extension = _extract_extension_from_url_path(file_url)
+
+    # Set default extension if we still couldn't determine one
+    if file_extension is None:
+        file_extension = '.json'
+        vana.logging.debug(f"Could not determine file extension for '{file_url}'. Using default: {file_extension}")
 
     encrypted_file_path = os.path.join(temp_dir, f"encrypted_file{file_extension}")
 
