@@ -111,7 +111,9 @@ def refine(
             "FILE_ID": request.file_id,
             "FILE_URL": url,
             "FILE_OWNER_ADDRESS": ownerAddress,
-            "REFINEMENT_ENCRYPTION_KEY": refinement_encryption_key
+            "REFINEMENT_ENCRYPTION_KEY": refinement_encryption_key,
+            "INPUT_DIR": "/input",
+            "OUTPUT_DIR": "/output"
         }
 
         docker_run_result = run_signed_container(
@@ -140,6 +142,48 @@ def refine(
             )
 
         # 6. Add refinement to the data registry
+        
+        # Ensure the refinement URL is a valid URL and the file is accessible
+        try:
+            vana.logging.info(f"Validating refinement URL: {docker_run_result.output_data.refinement_url}")
+            validation_file_path = download_file(docker_run_result.output_data.refinement_url)
+            validation_file_size = os.path.getsize(validation_file_path) if os.path.exists(validation_file_path) else 0
+            vana.logging.info(f"Successfully validated refinement URL, file size: {validation_file_size} bytes")
+            
+            # Clean up the validation file
+            if validation_file_path and os.path.exists(validation_file_path):
+                try:
+                    validation_temp_dir = os.path.dirname(validation_file_path)
+                    if os.path.isdir(validation_temp_dir):
+                        shutil.rmtree(validation_temp_dir)
+                        vana.logging.info(f"Cleaned up validation temporary directory: {validation_temp_dir}")
+                except Exception as cleanup_e:
+                    vana.logging.warning(f"Failed to clean up validation temporary directory: {cleanup_e}")
+                    
+            if validation_file_size == 0:
+                raise RefinementBaseException(
+                    status_code=400,
+                    message="Refinement URL points to an empty file",
+                    error_code="REFINEMENT_URL_EMPTY_FILE"
+                )
+        except FileDownloadError as e:
+            vana.logging.error(f"Refinement URL validation failed: {e.details.get('error', str(e))}")
+            raise RefinementBaseException(
+                status_code=400,
+                message=f"Refinement URL is not accessible: {e.details.get('error', str(e))}",
+                error_code="REFINEMENT_URL_INVALID",
+                details={"refinement_url": docker_run_result.output_data.refinement_url}
+            )
+        except Exception as e:
+            vana.logging.error(f"Unexpected error during refinement URL validation: {e}")
+            raise RefinementBaseException(
+                status_code=500,
+                message=f"Failed to validate refinement URL: {str(e)}",
+                error_code="REFINEMENT_URL_VALIDATION_ERROR",
+                details={"refinement_url": docker_run_result.output_data.refinement_url}
+            )
+        
+        # Write the refinement to the data registry
         transaction_hash, transaction_receipt = client.add_refinement_with_permission(
             file_id=request.file_id,
             refiner_id=request.refiner_id,
