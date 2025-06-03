@@ -82,22 +82,14 @@ def refine(
 
         # 3. Look up the refiner instructions
         refiner = client.get_refiner(request.refiner_id)
-        if refiner.get('dlp_id', 0) == 0:
+        dlp_id = refiner.get('dlp_id', 0)
+        if dlp_id == 0:
             raise RefinementBaseException(
                 status_code=404,
                 message=f"Refiner with ID {request.refiner_id} not found",
                 error_code="REFINER_NOT_FOUND"
             )
         vana.logging.info(f"Refiner for refiner ID {request.refiner_id}: {refiner}")
-
-        dlp_id = refiner.get('dlp_id')
-        if dlp_id == 0:
-            raise RefinementBaseException(
-                status_code=404,
-                message=f"Refiner {request.refiner_id} has no DLP",
-                error_code="REFINER_DLP_NOT_FOUND"
-            )
-        vana.logging.info(f"DLP ID for refiner ID {request.refiner_id}: {dlp_id}")
 
         dlp_pub_key = client.get_dlp_pub_key(dlp_id)
         if not dlp_pub_key:
