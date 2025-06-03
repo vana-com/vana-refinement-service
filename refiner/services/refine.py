@@ -90,6 +90,24 @@ def refine(
             )
         vana.logging.info(f"Refiner for refiner ID {request.refiner_id}: {refiner}")
 
+        dlp_id = refiner.get('dlp_id')
+        if dlp_id == 0:
+            raise RefinementBaseException(
+                status_code=404,
+                message=f"Refiner {request.refiner_id} has no DLP",
+                error_code="REFINER_DLP_NOT_FOUND"
+            )
+        vana.logging.info(f"DLP ID for refiner ID {request.refiner_id}: {dlp_id}")
+
+        dlp_pub_key = client.get_dlp_pub_key(dlp_id)
+        if not dlp_pub_key:
+            raise RefinementBaseException(
+                status_code=404,
+                message=f"DLP public key for refiner {request.refiner_id} and DLP ID {dlp_id} not found",
+                error_code="REFINER_DLP_PUBLIC_KEY_NOT_FOUND"
+            )
+        vana.logging.info(f"DLP public key for DLP ID {dlp_id}: {dlp_pub_key}")
+
         # 4. Generate Refinement Encryption Key (REK) from the user's original encryption key
         hkdf = HKDF(
             algorithm=hashes.SHA256(),
@@ -100,7 +118,7 @@ def refine(
         )
         master_key_bytes = bytes.fromhex(request.encryption_key.removeprefix('0x'))
         refinement_encryption_key = '0x' + hkdf.derive(master_key_bytes).hex()
-        encrypted_refinement_encryption_key, ephemeral_sk, nonce = ecies_encrypt(refiner.get('public_key'),
+        encrypted_refinement_encryption_key, ephemeral_sk, nonce = ecies_encrypt(dlp_pub_key,
                                                                                  refinement_encryption_key.encode())
         vana.logging.info(f"Encrypted encryption key: {encrypted_refinement_encryption_key.hex()}")
 
