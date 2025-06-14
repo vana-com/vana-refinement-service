@@ -201,7 +201,7 @@ def run_signed_container(
         raise
 
     finally:
-        # Clean up main container and output volume
+        # Clean up main container and volumes
         try:
             if container:
                 vana.logging.info(f"Removing container: {container_name}")
@@ -210,6 +210,15 @@ def run_signed_container(
              vana.logging.info(f"Container {container_name} already removed during cleanup.")
         except Exception as e:
             vana.logging.error(f"Error removing container {container_name}: {str(e)}")
+
+        try:
+            if input_volume:
+                vana.logging.info(f"Removing input volume: {input_volume_name}")
+                input_volume.remove(force=True)
+        except docker.errors.NotFound:
+             vana.logging.info(f"Input volume {input_volume_name} already removed during cleanup.")
+        except Exception as e:
+            vana.logging.error(f"Error removing input volume {input_volume_name}: {str(e)}")
 
         try:
             if output_volume:
