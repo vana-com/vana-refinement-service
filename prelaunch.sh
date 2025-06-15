@@ -62,8 +62,22 @@ perform_cleanup() {
     echo "Pruning unused images..."
     docker image prune -af
 
-    # 5. Prune all unused Docker volumes.
-    echo "Pruning unused volumes..."
+    # 5. Forcefully delete orphaned 'input-*' volumes.
+    # The standard `docker volume prune` is not working, so we target them by name.
+    echo "Searching for and forcefully deleting orphaned 'input-*' volumes..."
+    INPUT_VOLUMES=$(docker volume ls -q | grep '^input-')
+    if [ -n "$INPUT_VOLUMES" ]; then
+        echo "Found the following orphaned input volumes to delete:"
+        echo "$INPUT_VOLUMES"
+        # The -r flag prevents `xargs` from running `docker volume rm` if no volumes are found.
+        echo "$INPUT_VOLUMES" | xargs -r docker volume rm
+        echo "Orphaned 'input-*' volumes deleted."
+    else
+        echo "No orphaned 'input-*' volumes found."
+    fi
+
+    # 6. Run the standard volume prune for any other dangling volumes.
+    echo "Pruning any other unused volumes..."
     docker volume prune -f
 
     echo "--- Comprehensive cleanup finished ---"
