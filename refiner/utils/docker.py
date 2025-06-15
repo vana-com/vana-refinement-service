@@ -71,7 +71,7 @@ def run_signed_container(
     client = get_docker_client()
     cache = get_image_cache()
 
-    # Get container timeout from environment variable (default 10 seconds)
+    # Get container timeout from environment variable (default 60 seconds)
     container_timeout = int(os.getenv('CONTAINER_TIMEOUT_SECONDS', '60'))
     vana.logging.debug(f"Container timeout set to {container_timeout} seconds")
 
@@ -133,12 +133,21 @@ def run_signed_container(
             result = container.wait(timeout=container_timeout)
             docker_run.exit_code = result.get('StatusCode', -1)
             vana.logging.info(f"Container {container_name} finished with exit code {docker_run.exit_code}")
-        except requests.exceptions.ReadTimeout:
-            vana.logging.error(f"Container {container_name} timed out after {container_timeout} seconds. Killing container.")
-            try: container.kill()
-            except docker.errors.APIError as kill_e: vana.logging.error(f"Error killing timed-out container {container_name}: {kill_e}")
-            docker_run.exit_code = 137
-            raise ContainerTimeoutError(container_name=container_name, timeout=container_timeout)
+        # Catch the broader ConnectionError which wraps ReadTimeout in this context,
+        # or the more specific ReadTimeout from requests.
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            if "Read timed out" in str(e):
+                vana.logging.error(f"Container {container_name} timed out after {container_timeout} seconds. Killing container.")
+                try:
+                    container.kill()
+                except docker.errors.APIError as kill_e:
+                    vana.logging.error(f"Error killing timed-out container {container_name}: {kill_e}")
+                docker_run.exit_code = 137 # Standard exit code for SIGKILL
+                raise ContainerTimeoutError(container_name=container_name, timeout=container_timeout)
+            else:
+                # If it's another type of ConnectionError, re-raise it
+                vana.logging.error(f"A connection error occurred while waiting for container {container_name}: {str(e)}")
+                raise
         except Exception as e:
             vana.logging.error(f"Unexpected error waiting for container {container_name}: {str(e)}")
             docker_run.exit_code = -1
