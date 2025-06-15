@@ -1,12 +1,43 @@
 #!/bin/bash
 echo "----------------------------------------------"
-echo "Running Phala Cloud Pre-Launch Script v0.0.2 with additional decryption of encrypted ENVs"
-echo "Attempts to decrypt any ENVs with _ENCRYPTED_ENV postfix and export them without the postfix"
-echo "Use encrypt_env_var.py to encrypt the variables beforehand against TEE public key"
+echo "Running Phala Cloud Pre-Launch Script v0.0.3 with enhanced diagnostic logging"
+echo "This script will now log detailed disk usage before and after cleanup."
 echo "----------------------------------------------"
 set -e
 
-# Function: Perform Docker cleanup
+# Function to log the current state of disk usage for diagnostics.
+log_disk_state() {
+    TITLE=$1
+    echo ""
+    echo "============================================================"
+    echo "  DISK USAGE REPORT: $TITLE"
+    echo "============================================================"
+
+    echo ""
+    echo "--- Overall Filesystem Usage (df -h) ---"
+    df -h
+    echo ""
+
+    echo "--- Docker System-Wide Usage (docker system df -v) ---"
+    # Use -v for verbose output to see all items, not just reclaimable space.
+    docker system df -v
+    echo ""
+
+    echo "--- Top 20 Largest Items in /var/lib/docker (du) ---"
+    echo "(This may take a moment...)"
+    # This command finds the largest files/directories, helping to pinpoint the exact source of bloat.
+    du -ah /var/lib/docker 2>/dev/null | sort -rh | head -n 20
+    echo ""
+
+    echo "--- Summary of /tmp directory usage ---"
+    du -sh /tmp
+    echo ""
+
+    echo "==================== END REPORT: $TITLE ===================="
+    echo ""
+}
+
+# Function: Perform a comprehensive Docker and system cleanup
 perform_cleanup() {
     echo "--- Starting comprehensive cleanup of temporary artifacts ---"
 
@@ -23,16 +54,21 @@ perform_cleanup() {
     echo "Pruning stopped Docker containers..."
     docker container prune -f
 
-    # 3. Prune dangling and unused Docker images to save space.
+    # 3. Prune the Docker builder cache.
+    echo "Pruning Docker builder cache..."
+    docker builder prune -af
+
+    # 4. Prune dangling and unused Docker images.
     echo "Pruning unused images..."
     docker image prune -af
 
-    # 4. Prune all unused Docker volumes (critically, this cleans up orphaned input/output volumes).
+    # 5. Prune all unused Docker volumes.
     echo "Pruning unused volumes..."
     docker volume prune -f
 
     echo "--- Comprehensive cleanup finished ---"
 }
+
 
 # Function: Check Docker login status without exposing credentials
 check_docker_login() {
@@ -116,7 +152,11 @@ elif [[ -n "$DSTACK_AWS_ACCESS_KEY_ID" && -n "$DSTACK_AWS_SECRET_ACCESS_KEY" && 
     fi
 fi
 
+# Run the cleanup process.
 perform_cleanup
+
+# Log the state of the disk AGAIN, after cleanup, to see what changed.
+log_disk_state "AFTER CLEANUP"
 
 echo "----------------------------------------------"
 echo "Original Script execution completed"
