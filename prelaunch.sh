@@ -8,10 +8,30 @@ set -e
 
 # Function: Perform Docker cleanup
 perform_cleanup() {
-    echo "Pruning unused images"
+    echo "--- Starting comprehensive cleanup of temporary artifacts ---"
+
+    # 1. Clean up old system temporary files from previous crashed runs.
+    # The application uses tempfile.mkdtemp() which creates directories like /tmp/tmpXXXXXX.
+    # We find directories in /tmp matching this pattern that are older than 60 minutes and remove them.
+    # This is safer than `rm -rf /tmp/tmp*` and the time buffer prevents deleting files from a process that just started.
+    echo "Cleaning up orphaned temporary directories in /tmp..."
+    find /tmp -name "tmp*" -type d -mmin +60 -exec rm -rf {} +
+    echo "System temporary file cleanup complete."
+
+    # 2. Prune all stopped Docker containers.
+    # This is safe to run on startup as no application containers should be running yet.
+    echo "Pruning stopped Docker containers..."
+    docker container prune -f
+
+    # 3. Prune dangling and unused Docker images to save space.
+    echo "Pruning unused images..."
     docker image prune -af
-    echo "Pruning unused volumes"
+
+    # 4. Prune all unused Docker volumes (critically, this cleans up orphaned input/output volumes).
+    echo "Pruning unused volumes..."
     docker volume prune -f
+
+    echo "--- Comprehensive cleanup finished ---"
 }
 
 # Function: Check Docker login status without exposing credentials
