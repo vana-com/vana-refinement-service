@@ -18,6 +18,7 @@ from refiner.models.models import RefinementRequest, RefinementResponse
 from refiner.services.refine import refine
 from refiner.utils.config import add_args, check_config, default_config
 from refiner.utils.logfilter import RequestIdFilter
+from refiner.services.health import get_health_service
 
 load_dotenv()
 
@@ -100,6 +101,14 @@ class Refiner:
         )
         self.node_server.app.include_router(self.node_server.router)
 
+        # Comprehensive health endpoint for monitoring systems like Datadog
+        self.node_server.router.add_api_route(
+            f"/health",
+            self.get_health_status,
+            methods=["GET"]
+        )
+        self.node_server.app.include_router(self.node_server.router)
+
         # Enable CORS
         self.node_server.app.add_middleware(
             CORSMiddleware,
@@ -143,6 +152,30 @@ class Refiner:
             request,
             request_id
         )
+
+    def get_health_status(self):
+        """
+        Get comprehensive health status for monitoring systems.
+        Returns detailed metrics about refinement processing, system resources, and service health.
+        """
+        try:
+            health_service = get_health_service()
+            health_metrics = health_service.get_health_status(
+                wallet=getattr(self, 'wallet', None),
+                config=getattr(self, 'config', None), 
+                node_server=getattr(self, 'node_server', None)
+            )
+            
+            # Convert Pydantic model to dict for JSON response
+            return health_metrics.model_dump()
+            
+        except Exception as e:
+            vana.logging.error(f"Error generating health status: {str(e)}")
+            return {
+                "status": "unhealthy",
+                "error": f"Failed to generate health status: {str(e)}",
+                "timestamp": time.time()
+            }
 
     async def run(self):
         """

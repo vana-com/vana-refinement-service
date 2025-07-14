@@ -13,6 +13,7 @@ from refiner.models.models import RefinementRequest, RefinementResponse
 from refiner.utils.cryptography import decrypt_file, ecies_encrypt
 from refiner.utils.docker import run_signed_container
 from refiner.utils.files import download_file, detect_file_type
+from refiner.services.health import get_health_service
 
 def refine(
         client: vana.Client,
@@ -22,6 +23,10 @@ def refine(
     # Set request ID in context if provided
     if request_id:
         request_id_context.set(request_id)
+        
+    # Track refinement start time for health monitoring
+    health_service = get_health_service()
+    start_time = health_service.record_refinement_start()
 
     # Get file info from chain
     file_info = client.get_file(request.file_id)
@@ -204,12 +209,16 @@ def refine(
         vana.logging.info(
             f"Refinement added to the data registry with transaction hash: {transaction_hash.hex()} and receipt: {transaction_receipt}")
 
+        # Record successful refinement for health tracking
+        health_service.record_refinement_success(start_time)
+
         return RefinementResponse(
             add_refinement_tx_hash=transaction_hash.hex()
         )
 
     except FileDownloadError as e:
         vana.logging.error(f"File download failed for file ID {request.file_id}, URL {url}: {e.details.get('error', str(e))}")
+        health_service.record_refinement_failure(start_time, "FILE_DOWNLOAD_FAILED")
         raise RefinementBaseException(
             status_code=500,
             message=f"Failed to download file: {e.details.get('error', str(e))}",
@@ -219,6 +228,7 @@ def refine(
     except FileDecryptionError as e:
         error_msg = e.details.get('error', 'Invalid encryption key or corrupted file')
         vana.logging.error(f"File decryption failed for file ID {request.file_id}: {error_msg}")
+        health_service.record_refinement_failure(start_time, "FILE_DECRYPTION_FAILED")
         raise RefinementBaseException(
             status_code=400,
             message=f"Failed to decrypt file: {error_msg}",
@@ -227,6 +237,7 @@ def refine(
         )
     except Exception as e:
         vana.logging.exception(f"An unexpected error occurred during refinement for file ID {request.file_id}: {e}")
+        health_service.record_refinement_failure(start_time, "REFINEMENT_PROCESSING_ERROR")
         raise RefinementBaseException(
             status_code=500,
             message=f"An internal error occurred during refinement: {str(e)}",
