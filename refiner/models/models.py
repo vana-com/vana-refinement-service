@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
 # Job status enums
@@ -27,7 +27,8 @@ class RefinementJob(BaseModel):
     started_at: Optional[datetime] = Field(None, description="When job processing started")
     completed_at: Optional[datetime] = Field(None, description="When job processing completed")
     
-    @Field.validator('status')
+    @field_validator('status')
+    @classmethod
     def validate_status(cls, v):
         """Validate that status is one of the allowed values"""
         valid_statuses = {JobStatus.SUBMITTED, JobStatus.PROCESSING, JobStatus.COMPLETED, JobStatus.FAILED}
