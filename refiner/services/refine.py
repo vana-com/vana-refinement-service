@@ -15,14 +15,15 @@ from refiner.utils.docker import run_signed_container
 from refiner.utils.files import download_file, detect_file_type
 from refiner.services.health import get_health_service
 
-def truncate_docker_logs(logs: str, max_lines: int = 50) -> str:
+def truncate_docker_logs(logs: str, head_lines: int = 30, tail_lines: int = 20) -> str:
     """
     Truncate docker logs to a maximum number of lines for database storage.
     Keeps the first and last portions of the logs for debugging.
     
     Args:
         logs: The complete docker logs
-        max_lines: Maximum number of lines to keep (default 50)
+        head_lines: Number of lines to keep from the beginning
+        tail_lines: Number of lines to keep from the end
         
     Returns:
         str: Truncated logs with summary of removed content
@@ -33,16 +34,16 @@ def truncate_docker_logs(logs: str, max_lines: int = 50) -> str:
     lines = logs.split('\n')
     total_lines = len(lines)
     
-    if total_lines <= max_lines:
+    if total_lines <= head_lines + tail_lines:
         return logs
     
     # Keep first 30 lines and last 20 lines for context
-    first_portion = max_lines * 3 // 5  # 30 lines
-    last_portion = max_lines - first_portion  # 20 lines
+    first_portion = head_lines
+    last_portion = tail_lines
     
     truncated_lines = (
         lines[:first_portion] +
-        [f"... ({total_lines - max_lines} lines truncated for database storage) ..."] +
+        [f"... ({total_lines - head_lines - tail_lines} lines truncated for database storage) ..."] +
         lines[-last_portion:]
     )
     

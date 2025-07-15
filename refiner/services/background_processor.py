@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from typing import Optional
 import logging
+import os
 
 import vana
 
@@ -81,7 +82,8 @@ class BackgroundRefinementProcessor:
                 current_time = time.time()
                 if current_time - last_cleanup > cleanup_interval:
                     try:
-                        orphaned_count = refinement_jobs_store.cleanup_orphaned_jobs(timeout_minutes=60)
+                        timeout_minutes = int(os.getenv('BACKGROUND_PROCESSOR_JOB_CLEANUP_TIMEOUT_MINUTES', '60'))
+                        orphaned_count = refinement_jobs_store.cleanup_orphaned_jobs(timeout_minutes=timeout_minutes)
                         if orphaned_count > 0:
                             logger.info(f"Cleaned up {orphaned_count} orphaned jobs")
                         last_cleanup = current_time

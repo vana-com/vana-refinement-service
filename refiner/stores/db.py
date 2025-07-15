@@ -12,7 +12,7 @@ from sqlalchemy.pool import NullPool
 logger = logging.getLogger(__name__)
 
 # Create database directory if it doesn't exist
-STORES_DB_DIR = Path("/app/data")
+STORES_DB_DIR = Path(os.getenv('STORES_DB_DIR', "/app/data"))
 STORES_DB_PATH = STORES_DB_DIR / "refinement_jobs.db"
 os.makedirs(STORES_DB_DIR, exist_ok=True)
 

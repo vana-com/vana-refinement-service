@@ -191,7 +191,7 @@ class Refiner:
             
             # Poll for completion and return traditional response
             poll_interval = int(os.getenv('V1_API_POLL_INTERVAL', '2'))  # Poll every 2 seconds for v1 API
-            max_wait_time = int(os.getenv('V1_API_MAX_WAIT_TIME', '3600'))  # Maximum 1 hour wait
+            max_wait_time = int(os.getenv('V1_API_MAX_WAIT_TIME', '900'))  # Maximum 15 minutes wait
             start_time = time.time()
             
             while (time.time() - start_time) < max_wait_time:
