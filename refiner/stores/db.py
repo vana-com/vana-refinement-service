@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import Generator, Callable
 
-from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, Index, func, event
+from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, Index, func, event, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool
@@ -108,10 +108,10 @@ def verify_wal_mode():
     """Verify that WAL mode is properly enabled"""
     try:
         with get_db_session() as session:
-            result = session.execute("PRAGMA journal_mode").fetchone()
+            result = session.execute(text("PRAGMA journal_mode")).fetchone()
             journal_mode = result[0] if result else "unknown"
             
-            result = session.execute("PRAGMA synchronous").fetchone()
+            result = session.execute(text("PRAGMA synchronous")).fetchone()
             sync_mode = result[0] if result else "unknown"
             
             logger.info(f"SQLite configuration: journal_mode={journal_mode}, synchronous={sync_mode}")
@@ -125,10 +125,6 @@ def verify_wal_mode():
     except Exception as e:
         logger.error(f"Failed to verify WAL mode: {e}")
         return False
-
-# Initialize database and verify WAL mode
-initialize_database()
-verify_wal_mode()
 
 @contextmanager
 def get_db_session() -> Generator[Session, None, None]:
@@ -175,3 +171,7 @@ def session_scope(func: Callable):
             with get_db_session() as new_session:
                 return func(new_session, *args, **kwargs)
     return wrapper 
+
+# Initialize database and verify WAL mode
+initialize_database()
+verify_wal_mode()

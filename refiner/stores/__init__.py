@@ -3,7 +3,7 @@ This package contains the stores for the refinement service.
 """
 
 from .db import RefinementJobORM, initialize_database, get_db_session, session_scope
-from .refinement_jobs_store import RefinementJobStore
+from . import refinement_jobs_store
 
 
 __all__ = [
@@ -11,5 +11,5 @@ __all__ = [
     "initialize_database",
     "get_db_session",
     "session_scope",
-    "RefinementJobStore"
+    "refinement_jobs_store"
 ]

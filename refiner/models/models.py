@@ -73,11 +73,11 @@ class OffChainSchema(BaseModel):
     version: str
     description: str
     dialect: str
-    schema: str
+    schema_definition: str
     
 class Output(BaseModel):
     refinement_url: Optional[str] = None
-    schema: Optional[OffChainSchema] = None
+    schema_info: Optional[OffChainSchema] = None
     
 class DockerRun(BaseModel):
     container_name: str
