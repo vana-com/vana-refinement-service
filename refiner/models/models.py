@@ -1,7 +1,39 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
 from enum import Enum
+
+# Job status enums
+class JobStatus:
+    SUBMITTED = "submitted"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class RefinementJob(BaseModel):
+    """Pydantic model for refinement jobs"""
+    job_id: str = Field(..., description="Unique job identifier")
+    file_id: int = Field(..., description="File ID being refined") 
+    refiner_id: int = Field(..., description="Refiner ID to use")
+    encryption_key: str = Field(..., description="Encryption key for the file")
+    env_vars: Dict[str, str] = Field(default_factory=dict, description="Environment variables")
+    status: str = Field(default=JobStatus.SUBMITTED, description="Current job status")
+    error: Optional[str] = Field(None, description="Error message if failed")
+    transaction_hash: Optional[str] = Field(None, description="Blockchain transaction hash when completed")
+    docker_container_name: Optional[str] = Field(None, description="Docker container name used")
+    docker_exit_code: Optional[int] = Field(None, description="Docker container exit code")
+    docker_logs: Optional[str] = Field(None, description="Docker container logs")
+    submitted_at: datetime = Field(default_factory=datetime.now, description="When job was submitted")
+    started_at: Optional[datetime] = Field(None, description="When job processing started")
+    completed_at: Optional[datetime] = Field(None, description="When job processing completed")
+    
+    @Field.validator('status')
+    def validate_status(cls, v):
+        """Validate that status is one of the allowed values"""
+        valid_statuses = {JobStatus.SUBMITTED, JobStatus.PROCESSING, JobStatus.COMPLETED, JobStatus.FAILED}
+        if v not in valid_statuses:
+            raise ValueError(f"Status must be one of: {', '.join(valid_statuses)}")
+        return v
 
 
 class RefinementRequest(BaseModel):
@@ -16,6 +48,24 @@ class RefinementRequest(BaseModel):
 class RefinementResponse(BaseModel):
     add_refinement_tx_hash: str = Field(...,
                                         description="Transaction hash for the refinement being added to the Data Registry")
+
+# New async response models
+class RefinementJobResponse(BaseModel):
+    job_id: str = Field(..., description="Unique job ID for tracking the refinement")
+    status: str = Field(..., description="Current status of the job")
+    message: str = Field(default="Refinement job submitted successfully")
+
+class RefinementJobStatus(BaseModel):
+    job_id: str = Field(..., description="Unique job ID")
+    status: str = Field(..., description="Current status: submitted, processing, completed, failed")
+    file_id: int = Field(..., description="File ID being refined")
+    refiner_id: int = Field(..., description="Refiner ID used")
+    error: Optional[str] = Field(None, description="Error message if job failed")
+    transaction_hash: Optional[str] = Field(None, description="Transaction hash if completed successfully")
+    submitted_at: datetime = Field(..., description="When the job was submitted")
+    started_at: Optional[datetime] = Field(None, description="When processing started")
+    completed_at: Optional[datetime] = Field(None, description="When processing completed")
+    processing_duration_seconds: Optional[float] = Field(None, description="How long processing took")
 
 class OffChainSchema(BaseModel):
     name: str

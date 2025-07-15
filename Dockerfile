@@ -19,7 +19,7 @@ RUN poetry config virtualenvs.create false \
 COPY . /app/
 
 # Create necessary directories
-RUN mkdir -p /var/cache/vana/docker-images
+RUN mkdir -p /var/cache/vana/docker-images /app/data
 
 # Command to run the application
 CMD ["poetry", "run", "python", "-m", "refiner"]

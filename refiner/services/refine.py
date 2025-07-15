@@ -15,6 +15,40 @@ from refiner.utils.docker import run_signed_container
 from refiner.utils.files import download_file, detect_file_type
 from refiner.services.health import get_health_service
 
+def truncate_docker_logs(logs: str, head_lines: int = 30, tail_lines: int = 20) -> str:
+    """
+    Truncate docker logs to a maximum number of lines for database storage.
+    Keeps the first and last portions of the logs for debugging.
+    
+    Args:
+        logs: The complete docker logs
+        head_lines: Number of lines to keep from the beginning
+        tail_lines: Number of lines to keep from the end
+        
+    Returns:
+        str: Truncated logs with summary of removed content
+    """
+    if not logs:
+        return logs
+        
+    lines = logs.split('\n')
+    total_lines = len(lines)
+    
+    if total_lines <= head_lines + tail_lines:
+        return logs
+    
+    # Keep first 30 lines and last 20 lines for context
+    first_portion = head_lines
+    last_portion = tail_lines
+    
+    truncated_lines = (
+        lines[:first_portion] +
+        [f"... ({total_lines - head_lines - tail_lines} lines truncated for database storage) ..."] +
+        lines[-last_portion:]
+    )
+    
+    return '\n'.join(truncated_lines)
+
 def refine(
         client: vana.Client,
         request: RefinementRequest,
@@ -137,8 +171,31 @@ def refine(
             input_file_path=decrypted_file_path,
             request_id=request_id
         )
+        # Truncate logs to first 10 lines for logging
+        log_lines = docker_run_result.logs.split('\n', 11)
+        truncated_logs = '\n'.join(log_lines[:10])
+        if len(log_lines) > 10:
+            truncated_logs += f'\n... ({len(log_lines) - 10} more lines truncated)'
+        
         vana.logging.info(
-            f"Refiner Docker run result (Exit Code: {docker_run_result.exit_code}):\n{docker_run_result.logs}")
+            f"Refiner Docker run result (Exit Code: {docker_run_result.exit_code}):\n{truncated_logs}")
+        
+        # Store docker execution details in database if request_id is provided (background processing)
+        if request_id:
+            try:
+                from refiner.stores import refinement_jobs_store
+                # Store truncated docker logs for database storage
+                truncated_docker_logs = truncate_docker_logs(docker_run_result.logs)
+                
+                refinement_jobs_store.update_job_docker_info(
+                    job_id=request_id,
+                    container_name=docker_run_result.container_name,
+                    exit_code=docker_run_result.exit_code,
+                    logs=truncated_docker_logs
+                )
+                vana.logging.debug(f"Stored docker execution info for job {request_id}")
+            except Exception as docker_info_error:
+                vana.logging.warning(f"Failed to store docker info for job {request_id}: {docker_info_error}")
 
         if docker_run_result.exit_code != 0:
             raise RefinementBaseException(
