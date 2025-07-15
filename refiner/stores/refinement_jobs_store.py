@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from refiner.stores import db
 from refiner.models.models import RefinementRequest, JobStatus, RefinementJob
@@ -299,7 +300,7 @@ def claim_pending_jobs(session: Session, limit: int = 10) -> List[RefinementJob]
         # Use a raw SQL update with WHERE clause to atomically claim jobs
         # This ensures only one worker can claim each job
         result = session.execute(
-            f"""
+            text("""
             UPDATE refinement_jobs 
             SET status = :processing_status, started_at = :started_at
             WHERE job_id IN (
@@ -308,7 +309,7 @@ def claim_pending_jobs(session: Session, limit: int = 10) -> List[RefinementJob]
                 ORDER BY submitted_at ASC 
                 LIMIT :limit
             )
-            """,
+            """),
             {
                 "processing_status": JobStatus.PROCESSING,
                 "submitted_status": JobStatus.SUBMITTED,

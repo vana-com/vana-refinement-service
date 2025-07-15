@@ -160,7 +160,6 @@ class Refiner:
             exit(1)
 
         vana.logging.info(f"Running refiner on network: {self.config.chain.chain_endpoint}")
-        vana.logging.info(self.config)
         
         # Initialize and start background processor
         poll_interval = int(os.getenv('BACKGROUND_PROCESSOR_POLL_INTERVAL', '5'))
