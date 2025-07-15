@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from typing import Generator, Callable
 
 from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime, Index, func, event, text
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import NullPool
 
@@ -47,7 +47,7 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor.close()
 
 # Create session factory
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autoflush=False, bind=engine)
 
 # Create declarative base class for models
 Base = declarative_base()
