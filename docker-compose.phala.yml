@@ -15,6 +15,7 @@ services:
       - ${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}:${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}
       - ${STORES_DB_DIR:-/var/data/vana}:/app/data
     environment:
+      - ADMIN_WALLET_WHITELIST=${ADMIN_WALLET_WHITELIST}
       - CHAIN_NETWORK=${CHAIN_NETWORK}
       - CHAIN_NETWORK_ENDPOINT=${CHAIN_NETWORK_ENDPOINT}
       - HOTKEY_MNEMONIC=${HOTKEY_MNEMONIC}

@@ -12,17 +12,19 @@ from datetime import datetime
 import vana
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from fastapi import Request
+from fastapi import Request, Header
 
 from refiner.middleware.error_handler import error_handler_middleware
 from refiner.middleware.log_request_id_handler import add_request_id_middleware, request_id_context
-from refiner.models.models import RefinementRequest, RefinementResponse, RefinementJobResponse, RefinementJobStatus, JobStatus, HealthMetrics
+from refiner.models.models import RefinementRequest, RefinementResponse, RefinementJobResponse, RefinementJobStatus, JobStatus, HealthMetrics, RefinerExecutionStatusResponse
 from typing import Union
 from refiner.services.refine import refine
 from refiner.utils.config import add_args, check_config, default_config
 from refiner.utils.logfilter import RequestIdFilter
 from refiner.services.health import get_health_service
 from refiner.services.background_processor import initialize_background_processor, start_background_processor, stop_background_processor, get_background_processor
+from refiner.services.execution_stats_service import get_execution_stats_service
+from refiner.services.auth_service import verify_refiner_access
 from refiner.stores import refinement_jobs_store
 from refiner.errors.exceptions import RefinementBaseException
 
@@ -112,6 +114,14 @@ class Refiner:
             f"/processor/status",
             self.get_processor_status,
             methods=["GET"],
+        )
+        
+        # Refiner execution stats endpoint
+        self.node_server.router.add_api_route(
+            f"/stats/refiner/{{refiner_id}}",
+            self.get_refiner_execution_stats,
+            methods=["GET"],
+            response_model=RefinerExecutionStatusResponse,
         )
         
         self.node_server.app.include_router(self.node_server.router)
@@ -327,6 +337,54 @@ class Refiner:
         except Exception as e:
             vana.logging.error(f"Failed to get processor status: {e}")
             return {"error": str(e)}
+    
+    async def get_refiner_execution_stats(self, refiner_id: int, x_refiner_signature: str = Header(...)) -> RefinerExecutionStatusResponse:
+        """
+        Get comprehensive execution statistics for a specific refiner.
+        
+        Access is restricted to:
+        1. The owner of the refiner (verified by signature on refiner_id)
+        2. Admin wallets from the configured whitelist
+        
+        The signature should be on the refiner_id as a string.
+        
+        Args:
+            refiner_id: The ID of the refiner to get statistics for
+            x_refiner_signature: Signature of the refiner_id as a string
+            
+        Returns:
+            RefinerExecutionStatusResponse with comprehensive statistics
+            
+        Raises:
+            HTTPException: For authentication failures or server errors
+        """
+        try:
+            vana.logging.info(f"Fetching execution stats for refiner {refiner_id}")
+            
+            # Verify signature and check permissions
+            verified_address = verify_refiner_access(refiner_id, x_refiner_signature)
+            
+            # Get comprehensive execution statistics
+            stats_service = get_execution_stats_service()
+            status = stats_service.get_refiner_execution_status(refiner_id)
+            
+            vana.logging.info(f"Successfully retrieved execution stats for refiner {refiner_id}: "
+                           f"{status.total_jobs} total jobs, "
+                           f"{status.successful_jobs} successful, "
+                           f"{status.failed_jobs} failed")
+            
+            return status
+            
+        except Exception as e:
+            # If it's already an HTTPException, re-raise it
+            if hasattr(e, 'status_code'):
+                raise
+            vana.logging.error(f"Error retrieving execution stats for refiner {refiner_id}: {str(e)}", exc_info=True)
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to retrieve execution stats for refiner {refiner_id}: {str(e)}"
+            )
 
     def get_health_status(self) -> HealthMetrics:
         """

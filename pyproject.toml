@@ -13,6 +13,8 @@ eciespy = "^0.4.4"
 python-magic = "^0.4.27"
 psutil = "^5.9.0"
 sqlalchemy = "^2.0.41"
+web3 = "^6.0.0"
+eth-account = "^0.11.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
