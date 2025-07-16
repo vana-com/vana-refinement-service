@@ -16,7 +16,8 @@ from fastapi import Request
 
 from refiner.middleware.error_handler import error_handler_middleware
 from refiner.middleware.log_request_id_handler import add_request_id_middleware, request_id_context
-from refiner.models.models import RefinementRequest, RefinementResponse, RefinementJobResponse, RefinementJobStatus, JobStatus
+from refiner.models.models import RefinementRequest, RefinementResponse, RefinementJobResponse, RefinementJobStatus, JobStatus, HealthMetrics
+from typing import Union
 from refiner.services.refine import refine
 from refiner.utils.config import add_args, check_config, default_config
 from refiner.utils.logfilter import RequestIdFilter
@@ -95,6 +96,7 @@ class Refiner:
             f"/refine",
             self.handle_refinement_request,
             methods=["POST"],
+            response_model=Union[RefinementResponse, RefinementJobResponse],
         )
         
         # Job status endpoint
@@ -102,6 +104,7 @@ class Refiner:
             f"/refine/{{job_id}}",
             self.get_refinement_job_status,
             methods=["GET"],
+            response_model=RefinementJobStatus,
         )
         
         # Background processor status endpoint
@@ -125,7 +128,8 @@ class Refiner:
         self.node_server.router.add_api_route(
             f"/health",
             self.get_health_status,
-            methods=["GET"]
+            methods=["GET"],
+            response_model=HealthMetrics,
         )
         self.node_server.app.include_router(self.node_server.router)
 
@@ -168,7 +172,7 @@ class Refiner:
         start_background_processor()
         vana.logging.info(f"Background refinement processor initialized and started (poll_interval={poll_interval}s, max_concurrent={max_concurrent_jobs})")
 
-    async def handle_refinement_request(self, refinement_request: RefinementRequest, request: Request) -> dict:
+    async def handle_refinement_request(self, refinement_request: RefinementRequest, request: Request) -> Union[RefinementResponse, RefinementJobResponse]:
         """Handle refinement requests with header-based API versioning"""
         version = self._check_api_version(request)
         
@@ -208,9 +212,10 @@ class Refiner:
                 
                 if current_job.status == JobStatus.COMPLETED:
                     vana.logging.info(f"V1 API: Job {job.job_id} completed successfully")
-                    return RefinementResponse(
+                    response = RefinementResponse(
                         add_refinement_tx_hash=current_job.transaction_hash
                     )
+                    return response
                 elif current_job.status == JobStatus.FAILED:
                     vana.logging.error(f"V1 API: Job {job.job_id} failed: {current_job.error}")
                     raise RefinementBaseException(
@@ -266,11 +271,12 @@ class Refiner:
             
             vana.logging.info(f"Created refinement job {job.job_id} for file {request.file_id}")
             
-            return RefinementJobResponse(
+            response = RefinementJobResponse(
                 job_id=job.job_id,
                 status=job.status,
                 message="Refinement job submitted successfully"
             )
+            return response
             
         except Exception as e:
             vana.logging.error(f"Failed to create refinement job: {e}")
@@ -290,7 +296,7 @@ class Refiner:
             if job.started_at and job.completed_at:
                 processing_duration_seconds = (job.completed_at - job.started_at).total_seconds()
             
-            return RefinementJobStatus(
+            response = RefinementJobStatus(
                 job_id=job.job_id,
                 status=job.status,
                 file_id=job.file_id,
@@ -302,6 +308,7 @@ class Refiner:
                 completed_at=job.completed_at,
                 processing_duration_seconds=processing_duration_seconds
             )
+            return response
             
         except Exception as e:
             if "HTTPException" in str(type(e)):
@@ -321,7 +328,7 @@ class Refiner:
             vana.logging.error(f"Failed to get processor status: {e}")
             return {"error": str(e)}
 
-    def get_health_status(self):
+    def get_health_status(self) -> HealthMetrics:
         """
         Get comprehensive health status for monitoring systems.
         Returns detailed metrics about refinement processing, system resources, and service health.
@@ -334,16 +341,33 @@ class Refiner:
                 node_server=getattr(self, 'node_server', None)
             )
             
-            # Convert Pydantic model to dict for JSON response
-            return health_metrics.model_dump()
+            return health_metrics
             
         except Exception as e:
             vana.logging.error(f"Error generating health status: {str(e)}")
-            return {
-                "status": "unhealthy",
-                "error": f"Failed to generate health status: {str(e)}",
-                "timestamp": time.time()
-            }
+            # Return a minimal HealthMetrics object for error cases
+            from refiner.models.models import HealthStatus, SystemMetrics, RefinementMetrics, RecentActivity, ServiceHealth
+            return HealthMetrics(
+                status=HealthStatus.UNHEALTHY,
+                timestamp=time.time(),
+                uptime_seconds=0,
+                uptime_hours=0,
+                refinement_metrics=RefinementMetrics(),
+                recent_activity=RecentActivity(),
+                system_metrics=SystemMetrics(
+                    cpu_percent=0.0,
+                    memory_percent=0.0,
+                    memory_available_gb=0.0,
+                    disk_percent=0.0,
+                    disk_free_gb=0.0,
+                    docker_healthy=False,
+                    error=f"Failed to generate health status: {str(e)}"
+                ),
+                service_health=ServiceHealth(
+                    docker_healthy=False,
+                    node_server_running=False
+                )
+            )
 
     async def run(self):
         """
