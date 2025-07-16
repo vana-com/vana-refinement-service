@@ -211,29 +211,64 @@ def run_signed_container(
 
     finally:
         # Clean up main container and volumes
-        try:
-            if container:
+        cleanup_errors = []
+        
+        # Clean up container
+        if container:
+            try:
                 vana.logging.info(f"Removing container: {container_name}")
                 container.remove(force=True)
-        except docker.errors.NotFound:
-             vana.logging.info(f"Container {container_name} already removed during cleanup.")
-        except Exception as e:
-            vana.logging.error(f"Error removing container {container_name}: {str(e)}")
+            except docker.errors.NotFound:
+                vana.logging.info(f"Container {container_name} already removed during cleanup.")
+            except Exception as e:
+                error_msg = f"Error removing container {container_name}: {str(e)}"
+                vana.logging.error(error_msg)
+                cleanup_errors.append(error_msg)
 
-        try:
-            if input_volume:
-                vana.logging.info(f"Removing input volume: {input_volume_name}")
-                input_volume.remove(force=True)
-        except docker.errors.NotFound:
-             vana.logging.info(f"Input volume {input_volume_name} already removed during cleanup.")
-        except Exception as e:
-            vana.logging.error(f"Error removing input volume {input_volume_name}: {str(e)}")
+        # Clean up volumes with retry logic
+        def cleanup_volume_with_retry(volume_obj, volume_name, max_retries=3):
+            """Helper function to cleanup volume with retry logic"""
+            if not volume_obj:
+                return
+                
+            for attempt in range(max_retries):
+                try:
+                    vana.logging.info(f"Removing volume: {volume_name} (attempt {attempt + 1}/{max_retries})")
+                    volume_obj.remove(force=True)
+                    vana.logging.info(f"Successfully removed volume: {volume_name}")
+                    return
+                except docker.errors.NotFound:
+                    vana.logging.info(f"Volume {volume_name} already removed during cleanup.")
+                    return
+                except Exception as e:
+                    error_msg = f"Error removing volume {volume_name} (attempt {attempt + 1}): {str(e)}"
+                    vana.logging.warning(error_msg)
+                    if attempt == max_retries - 1:  # Last attempt
+                        cleanup_errors.append(error_msg)
+                        # Try alternative cleanup method as last resort
+                        try:
+                            vana.logging.info(f"Attempting alternative cleanup for volume: {volume_name}")
+                            client.api.remove_volume(volume_name, force=True)
+                            vana.logging.info(f"Alternative cleanup successful for volume: {volume_name}")
+                        except Exception as alt_e:
+                            alt_error_msg = f"Alternative cleanup also failed for volume {volume_name}: {str(alt_e)}"
+                            vana.logging.error(alt_error_msg)
+                            cleanup_errors.append(alt_error_msg)
+                    else:
+                        # Wait before retry
+                        import time
+                        time.sleep(1)
 
-        try:
-            if output_volume:
-                vana.logging.info(f"Removing output volume: {output_volume_name}")
-                output_volume.remove(force=True)
-        except docker.errors.NotFound:
-             vana.logging.info(f"Output volume {output_volume_name} already removed during cleanup.")
-        except Exception as e:
-            vana.logging.error(f"Error removing output volume {output_volume_name}: {str(e)}")
+        # Clean up input volume
+        cleanup_volume_with_retry(input_volume, input_volume_name)
+        
+        # Clean up output volume  
+        cleanup_volume_with_retry(output_volume, output_volume_name)
+
+        # Log summary of cleanup errors if any
+        if cleanup_errors:
+            vana.logging.error(f"Cleanup completed with {len(cleanup_errors)} errors:")
+            for error in cleanup_errors:
+                vana.logging.error(f"  - {error}")
+        else:
+            vana.logging.info("Container and volume cleanup completed successfully")

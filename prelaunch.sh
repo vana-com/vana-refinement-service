@@ -62,21 +62,85 @@ perform_cleanup() {
     echo "Pruning unused images..."
     docker image prune -af
 
-    # 5. Forcefully delete orphaned 'input-*' volumes.
-    # The standard `docker volume prune` is not working, so we target them by name.
+    # 5. Forcefully delete orphaned 'input-*' volumes using optimized approach.
     echo "Searching for and forcefully deleting orphaned 'input-*' volumes..."
-    INPUT_VOLUMES=$(docker volume ls -q | grep '^input-')
-    if [ -n "$INPUT_VOLUMES" ]; then
-        echo "Found the following orphaned input volumes to delete:"
-        echo "$INPUT_VOLUMES"
-        # The -r flag prevents `xargs` from running `docker volume rm` if no volumes are found.
-        echo "$INPUT_VOLUMES" | xargs -r docker volume rm
-        echo "Orphaned 'input-*' volumes deleted."
+    
+    # Use Docker's built-in filtering for better performance
+    # Set a timeout to prevent hanging
+    timeout 300 docker volume ls -q --filter "name=input-" > /tmp/input_volumes.txt 2>/dev/null
+    DOCKER_LS_EXIT_CODE=$?
+    
+    if [ $DOCKER_LS_EXIT_CODE -eq 124 ]; then
+        echo "Docker volume listing timed out after 5 minutes. Skipping volume cleanup to prevent hanging."
+        echo "Consider running manual cleanup: docker volume ls -q --filter 'name=input-' | xargs -r docker volume rm"
+    elif [ $DOCKER_LS_EXIT_CODE -eq 0 ] && [ -s /tmp/input_volumes.txt ]; then
+        VOLUME_COUNT=$(wc -l < /tmp/input_volumes.txt)
+        echo "Found $VOLUME_COUNT orphaned input volumes to delete."
+        
+        if [ $VOLUME_COUNT -gt 100 ]; then
+            echo "Large number of volumes detected. Processing in batches of 50..."
+            # Process in batches to avoid overwhelming the system
+            split -l 50 /tmp/input_volumes.txt /tmp/volume_batch_
+            
+            for batch_file in /tmp/volume_batch_*; do
+                if [ -s "$batch_file" ]; then
+                    BATCH_COUNT=$(wc -l < "$batch_file")
+                    echo "Processing batch with $BATCH_COUNT volumes..."
+                    cat "$batch_file" | xargs -r docker volume rm
+                fi
+                rm -f "$batch_file"
+            done
+        else
+            echo "Processing all $VOLUME_COUNT volumes..."
+            cat /tmp/input_volumes.txt | xargs -r docker volume rm
+        fi
+        
+        echo "Orphaned 'input-*' volumes cleanup completed."
     else
-        echo "No orphaned 'input-*' volumes found."
+        echo "No orphaned 'input-*' volumes found or command failed."
     fi
+    
+    # Clean up temporary file
+    rm -f /tmp/input_volumes.txt
+    
+    # 6. Clean up 'output-*' volumes as well using the same optimized approach
+    echo "Searching for and forcefully deleting orphaned 'output-*' volumes..."
+    
+    timeout 300 docker volume ls -q --filter "name=output-" > /tmp/output_volumes.txt 2>/dev/null
+    DOCKER_LS_EXIT_CODE=$?
+    
+    if [ $DOCKER_LS_EXIT_CODE -eq 124 ]; then
+        echo "Docker volume listing timed out after 5 minutes. Skipping output volume cleanup."
+    elif [ $DOCKER_LS_EXIT_CODE -eq 0 ] && [ -s /tmp/output_volumes.txt ]; then
+        VOLUME_COUNT=$(wc -l < /tmp/output_volumes.txt)
+        echo "Found $VOLUME_COUNT orphaned output volumes to delete."
+        
+        if [ $VOLUME_COUNT -gt 100 ]; then
+            echo "Large number of volumes detected. Processing in batches of 50..."
+            split -l 50 /tmp/output_volumes.txt /tmp/output_batch_
+            
+            for batch_file in /tmp/output_batch_*; do
+                if [ -s "$batch_file" ]; then
+                    BATCH_COUNT=$(wc -l < "$batch_file")
+                    echo "Processing batch with $BATCH_COUNT volumes..."
+                    cat "$batch_file" | xargs -r docker volume rm
+                fi
+                rm -f "$batch_file"
+            done
+        else
+            echo "Processing all $VOLUME_COUNT volumes..."
+            cat /tmp/output_volumes.txt | xargs -r docker volume rm
+        fi
+        
+        echo "Orphaned 'output-*' volumes cleanup completed."
+    else
+        echo "No orphaned 'output-*' volumes found or command failed."
+    fi
+    
+    # Clean up temporary file
+    rm -f /tmp/output_volumes.txt
 
-    # 6. Run the standard volume prune for any other dangling volumes.
+    # 7. Run the standard volume prune for any other dangling volumes.
     echo "Pruning any other unused volumes..."
     docker volume prune -f
 
