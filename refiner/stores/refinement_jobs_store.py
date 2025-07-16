@@ -389,4 +389,163 @@ def cleanup_orphaned_jobs(session: Session, timeout_minutes: int = 60) -> int:
     except Exception as e:
         logger.error(f"Error cleaning up orphaned jobs: {e}")
         session.rollback()
-        return 0 
+        return 0
+
+@db.session_scope
+def get_refiner_job_stats(session: Session, refiner_id: int) -> Dict:
+    """
+    Get comprehensive job statistics for a specific refiner.
+    
+    Args:
+        session: SQLAlchemy session
+        refiner_id: ID of the refiner to get stats for
+        
+    Returns:
+        Dict: Dictionary containing comprehensive statistics
+    """
+    try:
+        from datetime import datetime, timedelta
+        from collections import Counter
+        
+        # Get all jobs for this refiner
+        all_jobs = session.query(db.RefinementJobORM).filter(
+            db.RefinementJobORM.refiner_id == refiner_id
+        ).all()
+        
+        if not all_jobs:
+            return {
+                "total_jobs": 0,
+                "successful_jobs": 0,
+                "failed_jobs": 0,
+                "processing_jobs": 0,
+                "submitted_jobs": 0,
+                "first_job_at": None,
+                "last_job_at": None,
+                "average_processing_time_seconds": 0.0,
+                "success_rate": 0.0,
+                "jobs_per_hour": 0.0,
+                "processing_period_days": None,
+                "error_types": {},
+                "recent_errors": []
+            }
+        
+        # Count jobs by status
+        status_counts = Counter(job.status for job in all_jobs)
+        total_jobs = len(all_jobs)
+        successful_jobs = status_counts.get(JobStatus.COMPLETED, 0)
+        failed_jobs = status_counts.get(JobStatus.FAILED, 0)
+        processing_jobs = status_counts.get(JobStatus.PROCESSING, 0)
+        submitted_jobs = status_counts.get(JobStatus.SUBMITTED, 0)
+        
+        # Calculate success rate
+        success_rate = successful_jobs / total_jobs if total_jobs > 0 else 0.0
+        
+        # Get time range
+        timestamps = [job.submitted_at for job in all_jobs if job.submitted_at]
+        first_job_at = min(timestamps) if timestamps else None
+        last_job_at = max(timestamps) if timestamps else None
+        
+        # Calculate processing period
+        processing_period_days = None
+        if first_job_at and last_job_at:
+            processing_period_days = (last_job_at - first_job_at).total_seconds() / (24 * 3600)
+        
+        # Calculate jobs per hour
+        jobs_per_hour = 0.0
+        if processing_period_days and processing_period_days > 0:
+            jobs_per_hour = total_jobs / (processing_period_days * 24)
+        
+        # Calculate average processing time
+        completed_jobs = [job for job in all_jobs if job.status == JobStatus.COMPLETED and job.started_at and job.completed_at]
+        average_processing_time_seconds = 0.0
+        if completed_jobs:
+            processing_times = [(job.completed_at - job.started_at).total_seconds() for job in completed_jobs]
+            average_processing_time_seconds = sum(processing_times) / len(processing_times)
+        
+        # Get error types (top 10)
+        failed_jobs_with_errors = [job for job in all_jobs if job.status == JobStatus.FAILED and job.error]
+        error_types = {}
+        if failed_jobs_with_errors:
+            # Extract error types from error messages based on actual error codes used in the codebase
+            error_type_counts = Counter()
+            for job in failed_jobs_with_errors:
+                error_msg = job.error or ""
+                # Check for specific error codes that are actually used in the refinement service
+                if "FILE_DOWNLOAD_FAILED" in error_msg or "FILE_DOWNLOAD_ERROR" in error_msg:
+                    error_type_counts["FILE_DOWNLOAD_FAILED"] += 1
+                elif "FILE_DECRYPTION_FAILED" in error_msg or "FILE_DECRYPTION_ERROR" in error_msg:
+                    error_type_counts["FILE_DECRYPTION_FAILED"] += 1
+                elif "CONTAINER_EXECUTION_ERROR" in error_msg or "REFINER_CONTAINER_FAILED" in error_msg:
+                    error_type_counts["CONTAINER_EXECUTION_ERROR"] += 1
+                elif "CONTAINER_TIMEOUT_ERROR" in error_msg:
+                    error_type_counts["CONTAINER_TIMEOUT_ERROR"] += 1
+                elif "REFINEMENT_PROCESSING_ERROR" in error_msg:
+                    error_type_counts["REFINEMENT_PROCESSING_ERROR"] += 1
+                elif "REFINEMENT_TIMEOUT" in error_msg:
+                    error_type_counts["REFINEMENT_TIMEOUT"] += 1
+                elif "REFINER_NOT_FOUND" in error_msg:
+                    error_type_counts["REFINER_NOT_FOUND"] += 1
+                elif "FILE_NOT_FOUND" in error_msg:
+                    error_type_counts["FILE_NOT_FOUND"] += 1
+                elif "JOB_LOST" in error_msg:
+                    error_type_counts["JOB_LOST"] += 1
+                elif "REFINER_CONTAINER_NO_OUTPUT" in error_msg:
+                    error_type_counts["REFINER_CONTAINER_NO_OUTPUT"] += 1
+                elif "REFINEMENT_URL_INVALID" in error_msg or "REFINEMENT_URL_VALIDATION_ERROR" in error_msg:
+                    error_type_counts["REFINEMENT_URL_ERROR"] += 1
+                elif "IPFS_UPLOAD_ERROR" in error_msg:
+                    error_type_counts["IPFS_UPLOAD_ERROR"] += 1
+                elif "CRYPTOGRAPHY_ERROR" in error_msg:
+                    error_type_counts["CRYPTOGRAPHY_ERROR"] += 1
+                elif "INVALID_PERMISSION" in error_msg:
+                    error_type_counts["INVALID_PERMISSION"] += 1
+                else:
+                    error_type_counts["OTHER_ERROR"] += 1
+            
+            # Get top 10 error types
+            error_types = dict(error_type_counts.most_common(10))
+        
+        # Get recent errors (last 10 failed jobs)
+        recent_failed_jobs = [job for job in all_jobs if job.status == JobStatus.FAILED and job.error]
+        recent_failed_jobs.sort(key=lambda x: x.completed_at or x.submitted_at, reverse=True)
+        recent_errors = []
+        for job in recent_failed_jobs[:10]:
+            recent_errors.append({
+                "job_id": job.job_id,
+                "error": job.error[:200] + "..." if len(job.error) > 200 else job.error,  # Truncate long errors
+                "timestamp": (job.completed_at or job.submitted_at).isoformat()
+            })
+        
+        return {
+            "total_jobs": total_jobs,
+            "successful_jobs": successful_jobs,
+            "failed_jobs": failed_jobs,
+            "processing_jobs": processing_jobs,
+            "submitted_jobs": submitted_jobs,
+            "first_job_at": first_job_at,
+            "last_job_at": last_job_at,
+            "average_processing_time_seconds": average_processing_time_seconds,
+            "success_rate": success_rate,
+            "jobs_per_hour": jobs_per_hour,
+            "processing_period_days": processing_period_days,
+            "error_types": error_types,
+            "recent_errors": recent_errors
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting refiner job stats for refiner {refiner_id}: {e}")
+        return {
+            "total_jobs": 0,
+            "successful_jobs": 0,
+            "failed_jobs": 0,
+            "processing_jobs": 0,
+            "submitted_jobs": 0,
+            "first_job_at": None,
+            "last_job_at": None,
+            "average_processing_time_seconds": 0.0,
+            "success_rate": 0.0,
+            "jobs_per_hour": 0.0,
+            "processing_period_days": None,
+            "error_types": {},
+            "recent_errors": []
+        } 
