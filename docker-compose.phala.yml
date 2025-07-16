@@ -13,6 +13,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}:${DOCKER_IMAGE_CACHE_DIR:-/var/cache/vana/docker-images}
+      - ${STORES_DB_DIR:-/var/data/vana}:/app/data
     environment:
       - CHAIN_NETWORK=${CHAIN_NETWORK}
       - CHAIN_NETWORK_ENDPOINT=${CHAIN_NETWORK_ENDPOINT}

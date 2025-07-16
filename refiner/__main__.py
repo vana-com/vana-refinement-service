@@ -7,18 +7,24 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 import vana
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from fastapi import Request
 
 from refiner.middleware.error_handler import error_handler_middleware
 from refiner.middleware.log_request_id_handler import add_request_id_middleware, request_id_context
-from refiner.models.models import RefinementRequest, RefinementResponse
+from refiner.models.models import RefinementRequest, RefinementResponse, RefinementJobResponse, RefinementJobStatus, JobStatus, HealthMetrics
+from typing import Union
 from refiner.services.refine import refine
 from refiner.utils.config import add_args, check_config, default_config
 from refiner.utils.logfilter import RequestIdFilter
 from refiner.services.health import get_health_service
+from refiner.services.background_processor import initialize_background_processor, start_background_processor, stop_background_processor, get_background_processor
+from refiner.stores import refinement_jobs_store
+from refiner.errors.exceptions import RefinementBaseException
 
 load_dotenv()
 
@@ -85,12 +91,29 @@ class Refiner:
             max_workers=max_workers
         ).serve(chain_manager=self.chain_manager)).start())
 
-        # Refinement endpoint
+        # Refinement endpoint with header-based versioning
         self.node_server.router.add_api_route(
             f"/refine",
-            self.forward_refinement,
+            self.handle_refinement_request,
             methods=["POST"],
+            response_model=Union[RefinementResponse, RefinementJobResponse],
         )
+        
+        # Job status endpoint
+        self.node_server.router.add_api_route(
+            f"/refine/{{job_id}}",
+            self.get_refinement_job_status,
+            methods=["GET"],
+            response_model=RefinementJobStatus,
+        )
+        
+        # Background processor status endpoint
+        self.node_server.router.add_api_route(
+            f"/processor/status",
+            self.get_processor_status,
+            methods=["GET"],
+        )
+        
         self.node_server.app.include_router(self.node_server.router)
 
         # Basic health check for docker container monitoring
@@ -105,7 +128,8 @@ class Refiner:
         self.node_server.router.add_api_route(
             f"/health",
             self.get_health_status,
-            methods=["GET"]
+            methods=["GET"],
+            response_model=HealthMetrics,
         )
         self.node_server.app.include_router(self.node_server.router)
 
@@ -140,20 +164,171 @@ class Refiner:
             exit(1)
 
         vana.logging.info(f"Running refiner on network: {self.config.chain.chain_endpoint}")
-        vana.logging.info(self.config)
+        
+        # Initialize and start background processor
+        poll_interval = int(os.getenv('BACKGROUND_PROCESSOR_POLL_INTERVAL', '5'))
+        max_concurrent_jobs = int(os.getenv('BACKGROUND_PROCESSOR_MAX_CONCURRENT_JOBS', '3'))
+        initialize_background_processor(self.vana_client, poll_interval=poll_interval, max_concurrent_jobs=max_concurrent_jobs)
+        start_background_processor()
+        vana.logging.info(f"Background refinement processor initialized and started (poll_interval={poll_interval}s, max_concurrent={max_concurrent_jobs})")
 
-    async def forward_refinement(self, request: RefinementRequest) -> RefinementResponse:
-        request_id = request_id_context.get()
+    async def handle_refinement_request(self, refinement_request: RefinementRequest, request: Request) -> Union[RefinementResponse, RefinementJobResponse]:
+        """Handle refinement requests with header-based API versioning"""
+        version = self._check_api_version(request)
+        
+        if version == "v2":
+            # Use async background processing for v2
+            return await self.submit_refinement_job(refinement_request)
+        else:
+            # Use synchronous processing for v1 (default)
+            return await self.forward_refinement_sync(refinement_request)
+    
+    async def forward_refinement_sync(self, request: RefinementRequest) -> RefinementResponse:
+        """Synchronous refinement processing (v1 API) - uses background processor internally"""
+        
+        job = None
+        try:
+            # Submit job to background processor for controlled concurrency
+            job = refinement_jobs_store.create_job_from_request(request)
+            vana.logging.info(f"V1 API: Created background job {job.job_id} for synchronous processing")
+            
+            # Poll for completion and return traditional response
+            poll_interval = int(os.getenv('V1_API_POLL_INTERVAL', '2'))  # Poll every 2 seconds for v1 API
+            max_wait_time = int(os.getenv('V1_API_MAX_WAIT_TIME', '900'))  # Maximum 15 minutes wait
+            start_time = time.time()
+            
+            while (time.time() - start_time) < max_wait_time:
+                # Wait between polls without blocking the event loop
+                await asyncio.sleep(poll_interval)
+                
+                # Check job status
+                current_job = refinement_jobs_store.get_job(job.job_id)
+                if not current_job:
+                    raise RefinementBaseException(
+                        status_code=500,
+                        message=f"Job {job.job_id} disappeared during processing",
+                        error_code="JOB_LOST"
+                    )
+                
+                if current_job.status == JobStatus.COMPLETED:
+                    vana.logging.info(f"V1 API: Job {job.job_id} completed successfully")
+                    response = RefinementResponse(
+                        add_refinement_tx_hash=current_job.transaction_hash
+                    )
+                    return response
+                elif current_job.status == JobStatus.FAILED:
+                    vana.logging.error(f"V1 API: Job {job.job_id} failed: {current_job.error}")
+                    raise RefinementBaseException(
+                        status_code=500,
+                        message=f"Refinement failed: {current_job.error}",
+                        error_code="REFINEMENT_PROCESSING_ERROR"
+                    )
+                # If still submitted or processing, continue polling
+            
+            # Timeout reached
+            vana.logging.error(f"V1 API: Job {job.job_id} timed out after {max_wait_time} seconds")
+            raise RefinementBaseException(
+                status_code=504,
+                message=f"Refinement timed out after {max_wait_time} seconds",
+                error_code="REFINEMENT_TIMEOUT"
+            )
+        
+        finally:
+            # Clean up job status if it was created but something went wrong
+            if job and job.job_id:
+                try:
+                    current_job = refinement_jobs_store.get_job(job.job_id)
+                    if current_job and current_job.status in [JobStatus.SUBMITTED, JobStatus.PROCESSING]:
+                        # Mark job as failed due to API timeout/error
+                        refinement_jobs_store.update_job_status(
+                            job_id=job.job_id,
+                            status=JobStatus.FAILED,
+                            error="V1 API cleanup: job abandoned due to timeout or error",
+                            completed_at=datetime.now()
+                        )
+                        vana.logging.info(f"V1 API: Cleaned up abandoned job {job.job_id}")
+                except Exception as cleanup_error:
+                    vana.logging.error(f"V1 API: Failed to clean up job {job.job_id}: {cleanup_error}")
+    
+    def _check_api_version(self, request: Request) -> str:
+        """Check API version from headers and return appropriate version"""
+        # Check for Vana-Accept-Version header
+        vana_version = request.headers.get("vana-accept-version", "v1")
+        
+        # Also check standard Accept-Version header as fallback
+        accept_version = request.headers.get("accept-version", "v1")
+        
+        # Prioritize Vana-Accept-Version
+        version = vana_version if vana_version != "v1" else accept_version
+        
+        return version.lower()
 
-        return await asyncio.get_event_loop().run_in_executor(
-            thread_pool,
-            refine,
-            self.vana_client,
-            request,
-            request_id
-        )
+    async def submit_refinement_job(self, request: RefinementRequest) -> RefinementJobResponse:
+        """Submit a refinement job for background processing (v2 API)"""
+        try:
+            # Create job in database
+            job = refinement_jobs_store.create_job_from_request(request)
+            
+            vana.logging.info(f"Created refinement job {job.job_id} for file {request.file_id}")
+            
+            response = RefinementJobResponse(
+                job_id=job.job_id,
+                status=job.status,
+                message="Refinement job submitted successfully"
+            )
+            return response
+            
+        except Exception as e:
+            vana.logging.error(f"Failed to create refinement job: {e}")
+            raise
 
-    def get_health_status(self):
+    async def get_refinement_job_status(self, job_id: str) -> RefinementJobStatus:
+        """Get the status of a refinement job"""
+        try:
+            job = refinement_jobs_store.get_job(job_id)
+            
+            if not job:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+            
+            # Calculate processing duration if applicable
+            processing_duration_seconds = None
+            if job.started_at and job.completed_at:
+                processing_duration_seconds = (job.completed_at - job.started_at).total_seconds()
+            
+            response = RefinementJobStatus(
+                job_id=job.job_id,
+                status=job.status,
+                file_id=job.file_id,
+                refiner_id=job.refiner_id,
+                error=job.error,
+                transaction_hash=job.transaction_hash,
+                submitted_at=job.submitted_at,
+                started_at=job.started_at,
+                completed_at=job.completed_at,
+                processing_duration_seconds=processing_duration_seconds
+            )
+            return response
+            
+        except Exception as e:
+            if "HTTPException" in str(type(e)):
+                raise  # Re-raise HTTP exceptions
+            vana.logging.error(f"Failed to get job status for {job_id}: {e}")
+            raise
+    
+    async def get_processor_status(self) -> dict:
+        """Get the status of the background processor"""
+        try:
+            processor = get_background_processor()
+            if processor:
+                return processor.get_status()
+            else:
+                return {"error": "Background processor not initialized"}
+        except Exception as e:
+            vana.logging.error(f"Failed to get processor status: {e}")
+            return {"error": str(e)}
+
+    def get_health_status(self) -> HealthMetrics:
         """
         Get comprehensive health status for monitoring systems.
         Returns detailed metrics about refinement processing, system resources, and service health.
@@ -166,16 +341,33 @@ class Refiner:
                 node_server=getattr(self, 'node_server', None)
             )
             
-            # Convert Pydantic model to dict for JSON response
-            return health_metrics.model_dump()
+            return health_metrics
             
         except Exception as e:
             vana.logging.error(f"Error generating health status: {str(e)}")
-            return {
-                "status": "unhealthy",
-                "error": f"Failed to generate health status: {str(e)}",
-                "timestamp": time.time()
-            }
+            # Return a minimal HealthMetrics object for error cases
+            from refiner.models.models import HealthStatus, SystemMetrics, RefinementMetrics, RecentActivity, ServiceHealth
+            return HealthMetrics(
+                status=HealthStatus.UNHEALTHY,
+                timestamp=time.time(),
+                uptime_seconds=0,
+                uptime_hours=0,
+                refinement_metrics=RefinementMetrics(),
+                recent_activity=RecentActivity(),
+                system_metrics=SystemMetrics(
+                    cpu_percent=0.0,
+                    memory_percent=0.0,
+                    memory_available_gb=0.0,
+                    disk_percent=0.0,
+                    disk_free_gb=0.0,
+                    docker_healthy=False,
+                    error=f"Failed to generate health status: {str(e)}"
+                ),
+                service_health=ServiceHealth(
+                    docker_healthy=False,
+                    node_server_running=False
+                )
+            )
 
     async def run(self):
         """
@@ -227,6 +419,8 @@ class Refiner:
         """
         if self.is_running:
             vana.logging.debug("Stopping refiner in background thread.")
+            # Stop background processor
+            stop_background_processor()
             self.should_exit = True
             self.thread.join(5)
             self.is_running = False
@@ -251,6 +445,8 @@ class Refiner:
         """
         if self.is_running:
             vana.logging.debug("Stopping validator in background thread.")
+            # Stop background processor
+            stop_background_processor()
             self.should_exit = True
             self.thread.join(5)
             self.is_running = False
