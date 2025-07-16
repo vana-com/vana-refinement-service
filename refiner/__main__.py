@@ -362,7 +362,7 @@ class Refiner:
             vana.logging.info(f"Fetching execution stats for refiner {refiner_id}")
             
             # Verify signature and check permissions
-            verified_address = verify_refiner_access(refiner_id, x_refiner_signature)
+            verified_address = verify_refiner_access(refiner_id, x_refiner_signature, self.vana_client)
             
             # Get comprehensive execution statistics
             stats_service = get_execution_stats_service()

@@ -1,58 +1,15 @@
 from eth_account.messages import encode_defunct
 from eth_account import Account
-from web3 import Web3
-import json
 import logging
 import os
 from dotenv import load_dotenv
-from typing import Tuple
+from typing import Tuple, Optional
 from fastapi import HTTPException
 import vana
 
 
 # Load environment variables
 load_dotenv()
-
-# Web3 setup
-BLOCKCHAIN_HTTP_URL = os.getenv("CHAIN_NETWORK_ENDPOINT", "https://rpc.moksha.vana.org")
-
-# Load Data Refiner Registry ABI for refiner owner verification
-try:
-    # Try to load ABI from vana client config
-    config = vana.Config()
-    chain_manager = vana.ChainManager(config=config)
-    
-    # Get the Data Refiner Registry ABI from vana client
-    DATA_REFINER_REGISTRY_ABI = chain_manager.data_refiner_registry_contract.abi
-    DATA_REFINER_REGISTRY_CONTRACT_ADDRESS = chain_manager.data_refiner_registry_contract.address
-    
-    logging.info(f"Successfully loaded Data Refiner Registry ABI from vana client")
-except Exception as e:
-    logging.error(f"Failed to load Data Refiner Registry ABI from vana client: {e}")
-    # Fallback to empty ABI
-    DATA_REFINER_REGISTRY_ABI = []
-    DATA_REFINER_REGISTRY_CONTRACT_ADDRESS = None
-
-# Initialize Web3 connection
-try:
-    w3 = Web3(Web3.HTTPProvider(BLOCKCHAIN_HTTP_URL))
-    if not w3.is_connected():
-        logging.warning(f"Failed to connect to blockchain at {BLOCKCHAIN_HTTP_URL}")
-        w3 = None
-        data_refiner_registry_contract = None
-    else:
-        logging.info(f"Successfully connected to blockchain at {BLOCKCHAIN_HTTP_URL}")
-        if DATA_REFINER_REGISTRY_CONTRACT_ADDRESS and DATA_REFINER_REGISTRY_ABI:
-            data_refiner_registry_contract = w3.eth.contract(
-                address=Web3.to_checksum_address(DATA_REFINER_REGISTRY_CONTRACT_ADDRESS),
-                abi=DATA_REFINER_REGISTRY_ABI
-            )
-        else:
-            data_refiner_registry_contract = None
-except Exception as e:
-    logging.error(f"Error initializing Web3: {e}")
-    w3 = None
-    data_refiner_registry_contract = None
 
 # Admin wallet configuration for API authentication
 ADMIN_WALLET_WHITELIST = []
@@ -110,26 +67,30 @@ def verify_signature(signature: str, message: str) -> Tuple[bool, str]:
         return False, ""
 
 
-def get_refiner_owner(refiner_id: int) -> str:
+def get_refiner_owner(refiner_id: int, vana_client: vana.Client) -> str:
     """
-    Get the owner address of a refiner from the Data Refiner Registry contract.
+    Get the owner address of a refiner from the Data Refiner Registry contract using the vana client.
     
     Args:
         refiner_id: The ID of the refiner
+        vana_client: The vana client instance
         
     Returns:
         The owner address of the refiner, or empty string if not found
-    """    
-    if not w3 or not data_refiner_registry_contract:
-        logging.error("Cannot verify refiner owner: blockchain connection or Data Refiner Registry contract not available")
+    """
+    if not vana_client:
+        logging.error("Cannot verify refiner owner: vana client not available")
         return ""
     
     try:
-        # Get refiner info from the Data Refiner Registry contract
-        # The refiners() function returns a RefinerInfo struct with: (dlpId, owner, name, schemaDefinitionUrl, refinementInstructionUrl)
-        refiner_info = data_refiner_registry_contract.functions.refiners(refiner_id).call()
-        # The owner address is the second field (index 1) in the refiner struct
-        owner_address = refiner_info[1] if len(refiner_info) > 1 else ""
+        # Get refiner info from the vana client
+        refiner_info = vana_client.get_refiner(refiner_id)
+        if not refiner_info:
+            logging.warning(f"Refiner {refiner_id} not found")
+            return ""
+        
+        # Extract the owner address from the refiner info
+        owner_address = refiner_info.get('owner', '')
         
         logging.info(f"Refiner {refiner_id} owner: {owner_address}")
         return owner_address.lower() if owner_address else ""
@@ -152,13 +113,14 @@ def is_admin_wallet(address: str) -> bool:
     return address.lower() in ADMIN_WALLET_WHITELIST
 
 
-def verify_refiner_access(refiner_id: int, signature: str) -> str:
+def verify_refiner_access(refiner_id: int, signature: str, vana_client: vana.Client) -> str:
     """
     Verify that the requester has access to the refiner's statistics.
     
     Args:
         refiner_id: The ID of the refiner
         signature: The signature to verify
+        vana_client: The vana client instance
         
     Returns:
         The verified requester address
@@ -182,7 +144,7 @@ def verify_refiner_access(refiner_id: int, signature: str) -> str:
         return requester_address
     
     # Check if the address is the refiner owner
-    refiner_owner = get_refiner_owner(refiner_id)
+    refiner_owner = get_refiner_owner(refiner_id, vana_client)
     if not refiner_owner:
         logger.error(f"Could not determine owner for refiner {refiner_id}")
         raise HTTPException(status_code=500, detail="Could not verify refiner ownership")
