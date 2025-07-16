@@ -166,8 +166,10 @@ elif [[ -n "$DSTACK_AWS_ACCESS_KEY_ID" && -n "$DSTACK_AWS_SECRET_ACCESS_KEY" && 
     fi
 fi
 
-# Run the cleanup process.
-perform_cleanup
+# Temporarily disable cleanup to avoid hangups
+# perform_cleanup
+
+echo "Skipping cleanup to avoid hangups"
 
 # Log the state of the disk AGAIN, after cleanup, to see what changed.
 log_disk_state "AFTER CLEANUP"
