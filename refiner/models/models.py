@@ -140,3 +140,55 @@ class HealthMetrics(BaseModel):
     service_health: ServiceHealth = Field(..., description="Service health indicators")
 
 
+class RefinerExecutionStatusResponse(BaseModel):
+    refiner_id: int = Field(..., description="The ID of the refiner")
+    total_jobs: int = Field(..., description="Total number of refinement jobs processed")
+    successful_jobs: int = Field(..., description="Number of successful refinement jobs")
+    failed_jobs: int = Field(..., description="Number of failed refinement jobs")
+    processing_jobs: int = Field(..., description="Number of currently processing jobs")
+    submitted_jobs: int = Field(..., description="Number of jobs waiting to be processed")
+    first_job_at: Optional[datetime] = Field(None, description="Timestamp of the first job processed")
+    last_job_at: Optional[datetime] = Field(None, description="Timestamp of the last job processed")
+    average_processing_time_seconds: float = Field(0.0, description="Average processing time in seconds")
+    success_rate: float = Field(0.0, description="Success rate as a decimal (0.0 to 1.0)")
+    jobs_per_hour: float = Field(0.0, description="Average jobs processed per hour")
+    processing_period_days: Optional[float] = Field(None, description="Number of days between first and last job")
+    error_types: Dict[str, int] = Field(default_factory=dict, description="Number of errors by type (last 5-10 most common)")
+    recent_errors: List[Dict[str, str]] = Field(default_factory=list, description="Recent error details for debugging")
+    
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "refiner_id": 1,
+                    "total_jobs": 157,
+                    "successful_jobs": 142,
+                    "failed_jobs": 12,
+                    "processing_jobs": 2,
+                    "submitted_jobs": 1,
+                    "first_job_at": "2024-01-15T10:30:00Z",
+                    "last_job_at": "2024-01-20T14:45:00Z",
+                    "average_processing_time_seconds": 45.6,
+                    "success_rate": 0.904,
+                    "jobs_per_hour": 1.8,
+                    "processing_period_days": 5.18,
+                    "error_types": {
+                        "FILE_DOWNLOAD_FAILED": 5,
+                        "CONTAINER_EXECUTION_ERROR": 4,
+                        "REFINEMENT_PROCESSING_ERROR": 3,
+                        "FILE_DECRYPTION_FAILED": 2,
+                        "REFINEMENT_TIMEOUT": 1
+                    },
+                    "recent_errors": [
+                        {
+                            "job_id": "abc123",
+                            "error": "Failed to download file: Connection timeout",
+                            "timestamp": "2024-01-20T14:30:00Z"
+                        }
+                    ]
+                }
+            ]
+        }
+    }
+
+
