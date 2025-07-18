@@ -4,7 +4,7 @@
 
 The Vana Refinement Service is a crucial component of the Vana ecosystem's data ingress pipeline. It is hosted by Vana within a Trusted Execution Environment (TEE), but also designed to be self-hostable by Data Liquidity Pools (DLPs)
 
-This service orchestrates the execution of Data Refiner Docker images: https://github.com/vana-com/vana-data-refinement-template. Its primary goal is to transform raw, encrypted data submitted by data contributors into standardized and query-ready datasets suitable for indexing by the Vana Query Engine.
+This service orchestrates the execution of Data Refiner Docker images: https://github.com/vana-com/vana-data-refinement-template. Its primary goal is to transform raw, encrypted data submitted by data contributors into standardized and query-ready datasets suitable for indexing by the Vana Query Engine
 
 ## Workflow
 
