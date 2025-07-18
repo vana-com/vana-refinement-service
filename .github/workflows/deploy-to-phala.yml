@@ -1,6 +1,7 @@
 name: Deploy Refinement Service to Phala Cloud
 
 on:
+  # This trigger runs after the 'Build and Publish Docker Images' workflow completes successfully.
   workflow_run:
     workflows: ["Build and Publish Docker Images"]
     types:
@@ -8,211 +9,150 @@ on:
     branches:
       - main
       - dev
+
+  # This trigger allows to run the deployment manually from the Actions tab.
   workflow_dispatch:
     inputs:
       image_tag:
         description: 'Docker image tag to deploy'
         required: false
-        default: 'latest'
       environment:
         description: 'Override deployment environment'
-        required: false
+        required: true
         type: choice
         options:
           - mainnet
           - moksha
+        default: 'moksha'
       vm_name:
-        description: 'VM name in Phala Cloud'
+        description: 'Optional: Override the VM name in Phala Cloud'
         required: false
-      force_deploy:
-        description: 'Force deployment (delete existing VM)'
-        type: boolean
-        required: false
-        default: false
-      debug_mode:
-        description: 'Enable debug mode'
-        type: boolean
-        required: false
-        default: true
 
 jobs:
-  set-environment:
+  # This job determines which environment (mainnet/moksha) and Docker tag to use.
+  prepare-deployment:
     runs-on: ubuntu-latest
     outputs:
       environment_name: ${{ steps.set-env.outputs.environment_name }}
+      image_tag: ${{ steps.set-tag.outputs.image_tag }}
+      compose_file: ${{ steps.set-env.outputs.compose_file }}
+      phala_image: ${{ steps.set-env.outputs.phala_image }}
+      vm_name: ${{ steps.set-env.outputs.vm_name }}
     steps:
-      - id: set-env
+      - name: Determine Environment and VM Name
+        id: set-env
         run: |
+          # Priority: Manual dispatch > Triggering branch > Current branch
           if [ "${{ github.event.inputs.environment }}" != "" ]; then
-            echo "environment_name=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" == "workflow_run" ]; then
-            # Use the branch from the triggering workflow
-            echo "Source branch: ${{ github.event.workflow_run.head_branch }}"
-            if [ "${{ github.event.workflow_run.head_branch }}" == "main" ]; then
-              echo "environment_name=mainnet" >> $GITHUB_OUTPUT
-            else
-              echo "environment_name=moksha" >> $GITHUB_OUTPUT
-            fi
-          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            echo "environment_name=mainnet" >> $GITHUB_OUTPUT
+            ENV_NAME="${{ github.event.inputs.environment }}"
+          elif [ "${{ github.event.workflow_run.head_branch }}" == "main" ]; then
+            ENV_NAME="mainnet"
           else
-            echo "environment_name=moksha" >> $GITHUB_OUTPUT
+            ENV_NAME="moksha"
+          fi
+          
+          echo "Deployment environment set to: $ENV_NAME"
+          echo "environment_name=$ENV_NAME" >> $GITHUB_OUTPUT
+          
+          # Set environment-specific files and default VM name
+          if [ "$ENV_NAME" == "mainnet" ]; then
+            echo "compose_file=docker-compose.phala.yml" >> $GITHUB_OUTPUT
+            echo "phala_image=dstack-0.3.5" >> $GITHUB_OUTPUT
+            echo "vm_name=${{ github.event.inputs.vm_name || 'mainnet-refiner-1' }}" >> $GITHUB_OUTPUT
+          else
+            echo "compose_file=docker-compose.phala.dev.yml" >> $GITHUB_OUTPUT
+            echo "phala_image=dstack-dev-0.3.5" >> $GITHUB_OUTPUT
+            echo "vm_name=${{ github.event.inputs.vm_name || 'moksha-refiner-1' }}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Determine Docker Image Tag
+        id: set-tag
+        run: |
+          # Priority: Manual dispatch > Triggering workflow SHA > Current SHA
+          if [ "${{ github.event.inputs.image_tag }}" != "" ]; then
+            TAG="${{ github.event.inputs.image_tag }}"
+          elif [ "${{ github.event_name }}" == "workflow_run" ]; then
+            BRANCH_PREFIX=$([ "${{ steps.set-env.outputs.environment_name }}" == "mainnet" ] && echo "main" || echo "dev")
+            TAG="$BRANCH_PREFIX-${{ github.event.workflow_run.head_sha }}"
+          else
+            # Fallback for direct pushes, though workflow_run is primary
+            BRANCH_PREFIX=$([ "${{ steps.set-env.outputs.environment_name }}" == "mainnet" ] && echo "main" || echo "dev")
+            TAG="$BRANCH_PREFIX-${{ github.sha }}"
+          fi
+          
+          echo "Using Docker image tag: $TAG"
+          echo "image_tag=$TAG" >> $GITHUB_OUTPUT
+
+  # This job runs the actual deployment using the reusable action.
   deploy:
-    needs: set-environment
+    needs: prepare-deployment
     runs-on: ubuntu-latest
-    environment: ${{ needs.set-environment.outputs.environment_name }}
-
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
-
-    permissions:
-      actions: read
-      contents: read
+    environment: ${{ needs.prepare-deployment.outputs.environment_name }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
 
     steps:
-      - name: Confirm environment selection
-        run: |
-          echo "Deploying to: ${{ needs.set-environment.outputs.environment_name }}"
-          echo "Triggered by: ${{ github.event_name }}"
-          echo "Branch: ${{ github.ref }}"
-
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          # Ensure we check out the correct commit that triggered the build
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install deployment dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install httpx python-dotenv cryptography
-
-      - name: Set image tag
-        id: set_image_tag
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.image_tag }}" ]]; then
-            # Use manually provided tag
-            IMAGE_TAG="${{ github.event.inputs.image_tag }}"
-          elif [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            # For workflow_run events, get the SHA from the triggering workflow
-            if [[ "${{ needs.set-environment.outputs.environment_name }}" == "mainnet" ]]; then
-              IMAGE_TAG="main-${{ github.event.workflow_run.head_sha }}"
-            else
-              IMAGE_TAG="dev-${{ github.event.workflow_run.head_sha }}"
-            fi
-          else
-            # Default fallback
-            if [[ "${{ needs.set-environment.outputs.environment_name }}" == "mainnet" ]]; then
-              IMAGE_TAG="main-${{ github.sha }}"
-            else
-              IMAGE_TAG="dev-${{ github.sha }}"
-            fi
-          fi
-
-          echo "Using docker image tag: $IMAGE_TAG"
-          echo "tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-
-      - name: Set force flag
-        id: set_force_flag
-        run: |
-          if [[ "${{ github.event.inputs.force_deploy }}" == "true" ]]; then
-            echo "force_flag=--force" >> $GITHUB_OUTPUT
-          else
-            echo "force_flag=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Set debug flag
-        id: set_debug_flag
-        run: |
-          if [[ "${{ github.event.inputs.debug_mode }}" == "true" ]]; then
-            echo "debug_flag=--debug" >> $GITHUB_OUTPUT
-          else
-            echo "debug_flag=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Fetch Doppler secrets
+      - name: Fetch Doppler Secrets
         uses: dopplerhq/secrets-fetch-action@v1.3.0
         with:
           doppler-token: ${{ secrets.DOPPLER_SERVICE_ACCOUNT_API_TOKEN }}
-          doppler-project: vana-refinement-service
-          doppler-config: ${{ needs.set-environment.outputs.environment_name }}
+          doppler-project: 'vana-refinement-service'
+          doppler-config: ${{ needs.prepare-deployment.outputs.environment_name }}
+          # Expose Doppler secrets as environment variables for the next step
           inject-env-vars: true
 
-      # Debug step: List environment variables (first run only list mode)
-      - name: Debug - List environment variables
-        if: ${{ github.event.inputs.debug_mode == 'true' }}
-        run: |
-          echo "Listing environment variables that would be encrypted and sent to Phala Cloud"
-          python deploy_to_phala.py \
-            --list-env \
-            --auto-env \
-            --exclude-env "CI" \
-            --exclude-env "GITHUB_TOKEN"
-
-      - name: Check for VM ID
-        id: check_vm_id
-        run: |
-          if [[ -n "$PHALA_VM_ID" ]]; then
-            echo "Found existing VM ID: $PHALA_VM_ID"
-            echo "has_vm_id=true" >> $GITHUB_OUTPUT
-          else
-            echo "No VM ID found in Doppler configuration. Will create a new VM."
-            echo "has_vm_id=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Deploy to Phala Cloud
+        id: phala-deploy
+        uses: vana-com/phala-deployment-action@v1.1.7
+        with:
+          phala-cloud-api-key: ${{ secrets.PHALA_CLOUD_API_KEY }}
+          vm-name: ${{ needs.prepare-deployment.outputs.vm_name }}
+          vm-id: ${{ env.PHALA_VM_ID }} # Use VM_ID from Doppler if it exists
+          image: ${{ needs.prepare-deployment.outputs.phala_image }}
+          docker-compose-file: ${{ needs.prepare-deployment.outputs.compose_file }}
+          docker-tag: ${{ needs.prepare-deployment.outputs.image_tag }}
+          prelaunch-script-file: 'prelaunch.sh'
+          # List of the final variable names to be encrypted
+          env-vars-to-encrypt: |
+            [
+              "ADMIN_WALLET_WHITELIST",
+              "CHAIN_NETWORK",
+              "CHAIN_NETWORK_ENDPOINT",
+              "HOTKEY_MNEMONIC",
+              "QUERY_ENGINE_ACCOUNT",
+              "DOZZLA_USERS",
+              "SSH_USERNAME",
+              "SSH_PASSWORD"
+            ]
         env:
-          PHALA_CLOUD_API_KEY: ${{ secrets.PHALA_CLOUD_API_KEY }}
-          DOCKER_TAG: ${{ steps.set_image_tag.outputs.tag }}
-          PHALA_VM_NAME: ${{ github.event.inputs.vm_name || format('{0}-refiner-1', needs.set-environment.outputs.environment_name) }}
+          # This 'env' block securely provides the secret values to the action step.
+          # The names here MUST match the names in the list above.
+          # These values come from the Doppler 'secrets-fetch-action' step.
+          ADMIN_WALLET_WHITELIST: ${{ env.ADMIN_WALLET_WHITELIST }}
+          CHAIN_NETWORK: ${{ env.CHAIN_NETWORK }}
+          CHAIN_NETWORK_ENDPOINT: ${{ env.CHAIN_NETWORK_ENDPOINT }}
+          HOTKEY_MNEMONIC: ${{ env.HOTKEY_MNEMONIC }}
+          QUERY_ENGINE_ACCOUNT: ${{ env.QUERY_ENGINE_ACCOUNT }}
+          DOZZLA_USERS: ${{ env.DOZZLA_USERS }}
+          SSH_USERNAME: ${{ env.SSH_USERNAME }}
+          SSH_PASSWORD: ${{ env.SSH_PASSWORD }}
+
+      - name: Post Deployment Summary
+        if: always() # Always run this step to provide feedback
         run: |
-          DEPLOY_ENV="${{ needs.set-environment.outputs.environment_name }}"
-          echo "Deploying with image tag: $DOCKER_TAG to environment: $DEPLOY_ENV"
-          echo "VM Name: $PHALA_VM_NAME"
+          echo "## Phala Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ steps.phala-deploy.outputs.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ needs.prepare-deployment.outputs.environment_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **CVM Name:** ${{ steps.phala-deploy.outputs.vm-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **CVM ID:** ${{ steps.phala-deploy.outputs.vm-id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Tag:** ${{ needs.prepare-deployment.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
 
-          # Set environment-specific variables
-          if [[ "$DEPLOY_ENV" == "mainnet" ]]; then
-            PHALA_IMAGE="dstack-0.3.5"
-            COMPOSE_FILE="docker-compose.phala.yml"
-          else # Default to moksha settings
-            PHALA_IMAGE="dstack-dev-0.3.5"
-            COMPOSE_FILE="docker-compose.phala.dev.yml"
+          if [[ "${{ steps.phala-deploy.outputs.status }}" != "success" ]]; then
+            echo "Deployment failed. Please review the workflow logs for details."
+            exit 1
           fi
-          echo "Using Phala image: $PHALA_IMAGE"
-          echo "Using Compose file: $COMPOSE_FILE"
-
-          # Build the command with base parameters
-          BASE_CMD=(
-            python deploy_to_phala.py
-            --docker-tag "$DOCKER_TAG"
-            --update
-            --docker-compose-file "$COMPOSE_FILE"
-            --teepod-id 3
-            --image "$PHALA_IMAGE"
-            --auto-env
-            --exclude-env "CI"
-            --exclude-env "GITHUB_TOKEN"
-            --vm-name "$PHALA_VM_NAME"
-          )
-
-          # Add VM ID parameter only if we have one
-          if [[ "${{ steps.check_vm_id.outputs.has_vm_id }}" == "true" ]]; then
-            BASE_CMD+=(--vm-id "${PHALA_VM_ID}")
-            echo "Using Phala VM ID: $PHALA_VM_ID"
-          else
-            echo "Creating new VM (no existing VM ID found)"
-          fi
-
-          # Execute the command
-          "${BASE_CMD[@]}"
-
-      - name: Verify deployment
-        run: |
-          echo "Deployment completed. Check Phala Cloud dashboard for VM status."
-          echo "Docker images used:"
-          echo "- vanaorg/vana-refinement-service:${{ steps.set_image_tag.outputs.tag }}"
