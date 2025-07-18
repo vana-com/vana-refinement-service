@@ -101,7 +101,7 @@ jobs:
         uses: dopplerhq/secrets-fetch-action@v1.3.0
         with:
           doppler-token: ${{ secrets.DOPPLER_SERVICE_ACCOUNT_API_TOKEN }}
-          # The environment name from the previous job determines which Doppler config to use
+          doppler-project: 'vana-refinement-service'
           doppler-config: ${{ needs.prepare-deployment.outputs.environment_name }}
           # Expose Doppler secrets as environment variables for the next step
           inject-env-vars: true
@@ -150,7 +150,7 @@ jobs:
           echo "- **Environment:** ${{ needs.prepare-deployment.outputs.environment_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **CVM Name:** ${{ steps.phala-deploy.outputs.vm-name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **CVM ID:** ${{ steps.phala-deploy.outputs.vm-id }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Docker Tag:** `${{ needs.prepare-deployment.outputs.image_tag }}`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Tag:** ${{ needs.prepare-deployment.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
 
           if [[ "${{ steps.phala-deploy.outputs.status }}" != "success" ]]; then
             echo "Deployment failed. Please review the workflow logs for details."
