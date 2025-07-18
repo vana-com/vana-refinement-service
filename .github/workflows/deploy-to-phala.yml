@@ -108,7 +108,7 @@ jobs:
 
       - name: Deploy to Phala Cloud
         id: phala-deploy
-        uses: vana-com/phala-deployment-action@v1.1.6
+        uses: vana-com/phala-deployment-action@v1.1.7
         with:
           phala-cloud-api-key: ${{ secrets.PHALA_CLOUD_API_KEY }}
           vm-name: ${{ needs.prepare-deployment.outputs.vm_name }}
