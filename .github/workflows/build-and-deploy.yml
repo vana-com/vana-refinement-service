@@ -1,0 +1,130 @@
+name: Build and Deploy Refinement Service to Phala Cloud
+
+on:
+  # This is the primary trigger. It will run when you push to main or dev.
+  push:
+    branches:
+      - main
+      - dev
+
+  # This trigger allows you to run the workflow manually.
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Specify which branch to deploy (main or dev)'
+        required: true
+        type: choice
+        options:
+          - main
+          - dev
+        default: 'dev'
+      image_tag:
+        description: 'Optional: Specify an exact Docker image tag to deploy'
+        required: false
+
+jobs:
+  # JOB 1: Build and Push the Docker Image
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set_tags.outputs.image_tag }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          # On manual runs, check out the specified branch. On pushes, use the push ref.
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - name: Determine Docker Tag
+        id: set_tags
+        run: |
+          # Use the manually provided tag if it exists, otherwise generate one from the commit SHA
+          if [[ -n "${{ github.event.inputs.image_tag }}" ]]; then
+            TAG="${{ github.event.inputs.image_tag }}"
+          else
+            BRANCH_NAME=${{ github.ref_name }}
+            COMMIT_SHA=$(git rev-parse --short HEAD)
+            # Create tags like 'main-a1b2c3d' or 'dev-e4f5g6h'
+            TAG="$BRANCH_NAME-$COMMIT_SHA"
+          fi
+          
+          echo "Generated Docker Tag: $TAG"
+          echo "image_tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_SERVICE_ACCOUNT_PAT }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ vars.DOCKERHUB_USERNAME }}/vana-refinement-service:${{ steps.set_tags.outputs.image_tag }}
+
+  # JOB 2: Deploy the newly built image to Phala Cloud
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build # This job will only run if the 'build' job succeeds
+    environment: ${{ github.ref_name == 'main' && 'mainnet' || 'moksha' }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Determine Deployment Config
+        id: set-env
+        run: |
+          if [ "${{ github.ref_name }}" == "main" ]; then
+            echo "compose_file=docker-compose.phala.yml" >> $GITHUB_OUTPUT
+            echo "phala_image=dstack-0.3.5" >> $GITHUB_OUTPUT
+            echo "vm_name=mainnet-refiner-1" >> $GITHUB_OUTPUT
+          else
+            echo "compose_file=docker-compose.phala.dev.yml" >> $GITHUB_OUTPUT
+            echo "phala_image=dstack-dev-0.3.5" >> $GITHUB_OUTPUT
+            echo "vm_name=moksha-refiner-1" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch Doppler Secrets
+        id: doppler
+        uses: dopplerhq/secrets-fetch-action@v1.3.0
+        with:
+          doppler-token: ${{ secrets.DOPPLER_SERVICE_ACCOUNT_API_TOKEN }}
+          doppler-project: 'vana-refinement-service'
+          doppler-config: ${{ github.ref_name == 'main' && 'mainnet' || 'moksha' }}
+
+      - name: Deploy to Phala Cloud
+        id: phala-deploy
+        uses: vana-com/phala-deployment-action@v1
+        with:
+          phala-cloud-api-key: ${{ secrets.PHALA_CLOUD_API_KEY }}
+          vm-name: ${{ steps.set-env.outputs.vm_name }}
+          vm-id: ${{ steps.doppler.outputs.PHALA_VM_ID }}
+          image: ${{ steps.set-env.outputs.phala_image }}
+          docker-compose-file: ${{ steps.set-env.outputs.compose_file }}
+          docker-tag: ${{ needs.build.outputs.image_tag }}
+          prelaunch-script-file: 'prelaunch.sh'
+          doppler-secrets-json: ${{ toJSON(steps.doppler.outputs) }}
+          exclude-env-vars: '["PHALA_VM_ID"]'
+
+      - name: Post Deployment Summary
+        if: always()
+        run: |
+          echo "## Phala Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status:** ${{ steps.phala-deploy.outputs.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ github.ref_name == 'main' && 'mainnet' || 'moksha' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **CVM Name:** ${{ steps.phala-deploy.outputs.vm-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **CVM ID:** ${{ steps.phala-deploy.outputs.vm-id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Tag:** ${{ needs.build.outputs.image_tag }}" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ steps.phala-deploy.outputs.status }}" != "success" ]]; then
+            echo "Deployment failed. Please review the workflow logs for details."
+            exit 1
+          fi
