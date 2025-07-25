@@ -221,11 +221,6 @@ class HealthService:
             vana.logging.warning("Health status: UNHEALTHY - Critical resource usage")
             return HealthStatus.UNHEALTHY
             
-        # Check recent error rate
-        if recent_activity.errors_in_last_hour > 10:
-            vana.logging.warning("Health status: UNHEALTHY - High error rate")
-            return HealthStatus.UNHEALTHY
-            
         # Check if we haven't had a successful refinement in too long
         if (refinement_metrics.last_successful_refinement and 
             current_time - refinement_metrics.last_successful_refinement > 3600):
