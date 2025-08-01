@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 from enum import Enum
 
@@ -190,5 +190,36 @@ class RefinerExecutionStatusResponse(BaseModel):
             ]
         }
     }
+
+
+# Admin logging API models
+class RefinerLogRequest(BaseModel):
+    """Request model for fetching refiner logs"""
+    signature: str = Field(..., description="Wallet signature for authentication")
+    limit: Optional[int] = Field(default=100, description="Maximum number of logs to return", le=1000)
+    start_date: Optional[datetime] = Field(None, description="Start date for log filtering")
+    end_date: Optional[datetime] = Field(None, description="End date for log filtering")
+    job_id: Optional[str] = Field(None, description="Filter logs by specific job ID")
+
+
+class RefinerLogEntry(BaseModel):
+    """Individual log entry response model"""
+    timestamp: str = Field(..., description="Timestamp of the log entry")
+    job_id: str = Field(..., description="Job ID associated with the log")
+    level: str = Field(..., description="Log level (info, error, warning, etc.)")
+    message: str = Field(..., description="Log message")
+    docker_container: Optional[str] = Field(None, description="Docker container name if applicable")
+    exit_code: Optional[int] = Field(None, description="Container exit code if applicable")
+    full_logs: Optional[str] = Field(None, description="Full container logs if available")
+
+
+class RefinerLogsResponse(BaseModel):
+    """Response model for refiner logs"""
+    refiner_id: int = Field(..., description="The refiner ID")
+    total_entries: int = Field(..., description="Total number of log entries returned")
+    logs: List[RefinerLogEntry] = Field(..., description="List of log entries")
+    filters_applied: Dict[str, Any] = Field(..., description="Filters that were applied to the logs")
+
+
 
 

@@ -9,27 +9,32 @@ import docker
 import requests
 import vana
 
-from refiner.errors.exceptions import ContainerTimeoutError
+from refiner.errors.exceptions import ContainerTimeoutError, ContainerExecutionError
 from refiner.middleware.log_request_id_handler import request_id_context
 from refiner.models.models import DockerRun, Output
 from refiner.utils.docker_cache import DockerImageCache
 
-# Initialize the image cache as a module-level singleton
+# Initialize the image cache as a module-level singleton (thread-safe)
+import threading
 _image_cache = None
+_cache_lock = threading.Lock()
 
 
 def get_image_cache() -> DockerImageCache:
-    """Get or create the Docker image cache singleton."""
+    """Get or create the Docker image cache singleton (thread-safe)."""
     global _image_cache
     if _image_cache is None:
-        cache_dir = os.getenv('DOCKER_IMAGE_CACHE_DIR', '/var/cache/vana/docker-images')
-        max_cache_size_gb = float(os.getenv('DOCKER_IMAGE_CACHE_SIZE_GB', '20.0'))
-        ttl_days = int(os.getenv('DOCKER_IMAGE_CACHE_TTL_DAYS', '7'))
-        _image_cache = DockerImageCache(
-            cache_dir=cache_dir,
-            max_cache_size_gb=max_cache_size_gb,
-            ttl_days=ttl_days
-        )
+        with _cache_lock:
+            # Double-check pattern to avoid race conditions
+            if _image_cache is None:
+                cache_dir = os.getenv('DOCKER_IMAGE_CACHE_DIR', '/var/cache/vana/docker-images')
+                max_cache_size_gb = float(os.getenv('DOCKER_IMAGE_CACHE_SIZE_GB', '20.0'))
+                ttl_days = int(os.getenv('DOCKER_IMAGE_CACHE_TTL_DAYS', '7'))
+                _image_cache = DockerImageCache(
+                    cache_dir=cache_dir,
+                    max_cache_size_gb=max_cache_size_gb,
+                    ttl_days=ttl_days
+                )
     return _image_cache
 
 
@@ -196,9 +201,30 @@ def run_signed_container(
                 except json.JSONDecodeError as json_err:
                     vana.logging.error(f"Failed to parse JSON from output.json: {json_err}")
                     docker_run.logs += "\n[REFINER_ERROR] Failed to parse output.json content."
+                    # Raise ContainerExecutionError for JSON parsing failures
+                    raise ContainerExecutionError(
+                        container_name=container_name,
+                        exit_code=docker_run.exit_code,
+                        logs=docker_run.logs
+                    )
                 except Exception as pydantic_err: # Catch potential Pydantic validation errors
                      vana.logging.error(f"Failed to validate output.json against Output model: {pydantic_err}")
                      docker_run.logs += f"\n[REFINER_ERROR] Failed to validate output.json content: {pydantic_err}"
+                     # Raise ContainerExecutionError for validation failures
+                     raise ContainerExecutionError(
+                         container_name=container_name,
+                         exit_code=docker_run.exit_code,
+                         logs=docker_run.logs
+                     )
+            else:
+                # Container succeeded but produced no output - this is an execution error
+                vana.logging.error(f"Container {container_name} executed successfully but produced no output.json")
+                docker_run.logs += "\n[REFINER_ERROR] Container executed successfully but produced no output.json"
+                raise ContainerExecutionError(
+                    container_name=container_name,
+                    exit_code=docker_run.exit_code,
+                    logs=docker_run.logs
+                )
         else:
              vana.logging.warning(f"Skipping output.json retrieval as container exit code was {docker_run.exit_code}")
 
