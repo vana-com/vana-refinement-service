@@ -14,22 +14,39 @@ from refiner.utils.cryptography import decrypt_file, ecies_encrypt
 from refiner.utils.docker import run_signed_container
 from refiner.utils.files import download_file, detect_file_type
 from refiner.services.health import get_health_service
+from refiner.services.refiner_logging import get_refiner_logging_service
 
-def truncate_docker_logs(logs: str, head_lines: int = 30, tail_lines: int = 20) -> str:
+def truncate_docker_logs(logs: str, head_lines: int = 30, tail_lines: int = 20, max_chars: int = 1600) -> str:
     """
-    Truncate docker logs to a maximum number of lines for database storage.
+    Truncate docker logs to a maximum number of lines and characters for database storage.
     Keeps the first and last portions of the logs for debugging.
     
     Args:
         logs: The complete docker logs
         head_lines: Number of lines to keep from the beginning
         tail_lines: Number of lines to keep from the end
+        max_chars: Maximum number of characters to keep in total
         
     Returns:
         str: Truncated logs with summary of removed content
     """
     if not logs:
         return logs
+    
+    # First check character count - if too long, truncate by characters first
+    if len(logs) > max_chars:
+        # Keep first half and last half of character limit
+        head_chars = max_chars // 2
+        tail_chars = max_chars // 2
+        
+        truncated_logs = (
+            logs[:head_chars] + 
+            f"\n\n... ({len(logs) - max_chars} characters truncated for database storage) ...\n\n" +
+            logs[-tail_chars:]
+        )
+        
+        # Now check line count on the character-truncated logs
+        logs = truncated_logs
         
     lines = logs.split('\n')
     total_lines = len(lines)
@@ -37,14 +54,11 @@ def truncate_docker_logs(logs: str, head_lines: int = 30, tail_lines: int = 20) 
     if total_lines <= head_lines + tail_lines:
         return logs
     
-    # Keep first 30 lines and last 20 lines for context
-    first_portion = head_lines
-    last_portion = tail_lines
-    
+    # Keep first and last portions for context
     truncated_lines = (
-        lines[:first_portion] +
+        lines[:head_lines] +
         [f"... ({total_lines - head_lines - tail_lines} lines truncated for database storage) ..."] +
-        lines[-last_portion:]
+        lines[-tail_lines:]
     )
     
     return '\n'.join(truncated_lines)
@@ -61,6 +75,15 @@ def refine(
     # Track refinement start time for health monitoring
     health_service = get_health_service()
     start_time = health_service.record_refinement_start()
+    
+    # Log job start to refiner-specific logging
+    refiner_logging = get_refiner_logging_service()
+    refiner_logging.log_refinement_job(
+        refiner_id=request.refiner_id,
+        job_id=request_id or "sync",
+        level="info",
+        message=f"Starting refinement job for file {request.file_id}"
+    )
 
     # Get file info from chain
     file_info = client.get_file(request.file_id)
@@ -180,6 +203,21 @@ def refine(
         vana.logging.info(
             f"Refiner Docker run result (Exit Code: {docker_run_result.exit_code}):\n{truncated_logs}")
         
+        # Log to refiner-specific logging system
+        refiner_logging = get_refiner_logging_service()
+        level = "error" if docker_run_result.exit_code != 0 else "info"
+        message = f"Docker container execution completed with exit code {docker_run_result.exit_code}"
+        
+        refiner_logging.log_refinement_job(
+            refiner_id=request.refiner_id,
+            job_id=request_id or "sync",
+            level=level,
+            message=message,
+            docker_container=docker_run_result.container_name,
+            exit_code=docker_run_result.exit_code,
+            full_logs=docker_run_result.logs
+        )
+        
         # Store docker execution details in database if request_id is provided (background processing)
         if request_id:
             try:
@@ -198,6 +236,17 @@ def refine(
                 vana.logging.warning(f"Failed to store docker info for job {request_id}: {docker_info_error}")
 
         if docker_run_result.exit_code != 0:
+            # Log the error to refiner-specific logs
+            refiner_logging.log_refinement_job(
+                refiner_id=request.refiner_id,
+                job_id=request_id or "sync",
+                level="error",
+                message=f"Refiner container failed with exit code {docker_run_result.exit_code}",
+                docker_container=docker_run_result.container_name,
+                exit_code=docker_run_result.exit_code,
+                full_logs=docker_run_result.logs
+            )
+            
             raise RefinementBaseException(
                 status_code=500,
                 message=f"Refiner container failed with exit code {docker_run_result.exit_code}",
@@ -205,13 +254,14 @@ def refine(
                 details={"logs": docker_run_result.logs[-1000:]}  # Include last 1000 chars of logs
             )
         vana.logging.info(f"Refined file URL: {docker_run_result.output_data.refinement_url}")
-
-        if not docker_run_result.output_data and not docker_run_result.output_data.refinement_url:
-            raise RefinementBaseException(
-                status_code=400,
-                message="Refiner container did not output a refinement URL",
-                error_code="REFINER_CONTAINER_NO_OUTPUT"
-            )
+        
+        # Log successful completion
+        refiner_logging.log_refinement_job(
+            refiner_id=request.refiner_id,
+            job_id=request_id or "sync",
+            level="info",
+            message=f"Refinement completed successfully. Output URL: {docker_run_result.output_data.refinement_url}"
+        )
 
         # 6. Add refinement to the data registry
         
