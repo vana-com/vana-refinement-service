@@ -12,11 +12,11 @@ from datetime import datetime
 import vana
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from fastapi import Request, Header
+from fastapi import Request, Header, HTTPException
 
 from refiner.middleware.error_handler import error_handler_middleware
 from refiner.middleware.log_request_id_handler import add_request_id_middleware, request_id_context
-from refiner.models.models import RefinementRequest, RefinementResponse, RefinementJobResponse, RefinementJobStatus, JobStatus, HealthMetrics, RefinerExecutionStatusResponse
+from refiner.models.models import RefinementRequest, RefinementResponse, RefinementJobResponse, RefinementJobStatus, JobStatus, HealthMetrics, RefinerExecutionStatusResponse, RefinerLogRequest, RefinerLogsResponse, RefinerLogEntry
 from typing import Union
 from refiner.services.refine import refine
 from refiner.utils.config import add_args, check_config, default_config
@@ -24,7 +24,7 @@ from refiner.utils.logfilter import RequestIdFilter
 from refiner.services.health import get_health_service
 from refiner.services.background_processor import initialize_background_processor, start_background_processor, stop_background_processor, get_background_processor
 from refiner.services.execution_stats_service import get_execution_stats_service
-from refiner.services.auth_service import verify_refiner_access
+from refiner.services.auth_service import verify_refiner_access, verify_signature, is_admin_wallet
 from refiner.stores import refinement_jobs_store
 from refiner.errors.exceptions import RefinementBaseException
 
@@ -122,6 +122,14 @@ class Refiner:
             self.get_refiner_execution_stats,
             methods=["GET"],
             response_model=RefinerExecutionStatusResponse,
+        )
+        
+        # Admin endpoint to get logs for a specific refiner
+        self.node_server.router.add_api_route(
+            f"/logs/refiner/{{refiner_id}}",
+            self.get_refiner_logs_admin,
+            methods=["POST"],
+            response_model=RefinerLogsResponse,
         )
         
         self.node_server.app.include_router(self.node_server.router)
@@ -298,7 +306,6 @@ class Refiner:
             job = refinement_jobs_store.get_job(job_id)
             
             if not job:
-                from fastapi import HTTPException
                 raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
             
             # Calculate processing duration if applicable
@@ -380,11 +387,90 @@ class Refiner:
             if hasattr(e, 'status_code'):
                 raise
             vana.logging.error(f"Error retrieving execution stats for refiner {refiner_id}: {str(e)}", exc_info=True)
-            from fastapi import HTTPException
             raise HTTPException(
                 status_code=500, 
                 detail=f"Failed to retrieve execution stats for refiner {refiner_id}: {str(e)}"
             )
+
+    async def get_refiner_logs_admin(self, refiner_id: int, request: RefinerLogRequest) -> RefinerLogsResponse:
+        """
+        Get logs for a specific refiner. Admin-only endpoint.
+        
+        Access is restricted to admin wallets from the configured whitelist.
+        The signature should be on a message like 'admin_logs_refiner_{refiner_id}'.
+        
+        Args:
+            refiner_id: The ID of the refiner to get logs for
+            request: Request body containing signature and filtering options
+            
+        Returns:
+            RefinerLogsResponse with filtered logs
+            
+        Raises:
+            HTTPException: For authentication failures or server errors
+        """
+        try:
+            vana.logging.info(f"Admin request for logs of refiner {refiner_id}")
+            
+            # Verify signature for admin access
+            message_to_sign = f"admin_logs_refiner_{refiner_id}"
+            is_valid, requester_address = verify_signature(request.signature, message_to_sign)
+            
+            if not is_valid:
+                vana.logging.warning(f"Invalid signature for admin logs request for refiner {refiner_id}")
+                raise HTTPException(status_code=403, detail="Invalid signature")
+            
+            # Check if the address is an admin wallet
+            if not is_admin_wallet(requester_address):
+                vana.logging.warning(f"Non-admin wallet {requester_address} attempted to access logs for refiner {refiner_id}")
+                raise HTTPException(status_code=403, detail="Access denied: Admin access required")
+            
+            vana.logging.info(f"Admin wallet {requester_address} accessing logs for refiner {refiner_id}")
+            
+            # Get logs from the refiner logging service
+            from refiner.services.refiner_logging import get_refiner_logging_service
+            refiner_logging = get_refiner_logging_service()
+            
+            logs = refiner_logging.get_refiner_logs(
+                refiner_id=refiner_id,
+                limit=request.limit or 100,
+                start_date=request.start_date,
+                end_date=request.end_date,
+                job_id=request.job_id
+            )
+            
+            # Convert to response format
+            log_entries = [
+                RefinerLogEntry(**log) for log in logs
+            ]
+            
+            filters_applied = {
+                "limit": request.limit or 100,
+                "start_date": request.start_date.isoformat() if request.start_date else None,
+                "end_date": request.end_date.isoformat() if request.end_date else None,
+                "job_id": request.job_id
+            }
+            
+            response = RefinerLogsResponse(
+                refiner_id=refiner_id,
+                total_entries=len(log_entries),
+                logs=log_entries,
+                filters_applied=filters_applied
+            )
+            
+            vana.logging.info(f"Successfully retrieved {len(log_entries)} log entries for refiner {refiner_id}")
+            return response
+            
+        except Exception as e:
+            # If it's already an HTTPException, re-raise it
+            if hasattr(e, 'status_code'):
+                raise
+            vana.logging.error(f"Error retrieving logs for refiner {refiner_id}: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to retrieve logs for refiner {refiner_id}: {str(e)}"
+            )
+
 
     def get_health_status(self) -> HealthMetrics:
         """

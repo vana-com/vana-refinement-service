@@ -3,6 +3,7 @@ name = "vana-refinement-service"
 version = "0.1.0"
 description = "Refinement service for refining files using Vana's Data Registry."
 authors = ["Kahtaf Alam <kahtaf@opendatalabs.xyz>"]
+packages = [{include = "refiner"}]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
@@ -13,6 +14,9 @@ eciespy = "^0.4.4"
 python-magic = "^0.4.27"
 psutil = "^5.9.0"
 sqlalchemy = "^2.0.41"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
