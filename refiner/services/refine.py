@@ -1,11 +1,9 @@
 import os
 import shutil
 import uuid
+import tempfile
 
 import vana
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from refiner.errors.exceptions import FileDecryptionError, FileDownloadError, RefinementBaseException
 from refiner.middleware.log_request_id_handler import request_id_context
@@ -15,6 +13,7 @@ from refiner.utils.docker import run_signed_container
 from refiner.utils.files import download_file, detect_file_type
 from refiner.services.health import get_health_service
 from refiner.services.refiner_logging import get_refiner_logging_service
+
 
 def truncate_docker_logs(logs: str, head_lines: int = 30, tail_lines: int = 20, max_chars: int = 1600) -> str:
     """
@@ -71,8 +70,8 @@ def refine(
     # Set request ID in context if provided
     if request_id:
         request_id_context.set(request_id)
-        
-    # Track refinement start time for health monitoring
+
+    # Get health service for tracking metrics
     health_service = get_health_service()
     start_time = health_service.record_refinement_start()
     
@@ -85,7 +84,45 @@ def refine(
         message=f"Starting refinement job for file {request.file_id}"
     )
 
-    # Get file info from chain
+    vana.logging.info(
+        f"Starting refinement for file_id={request.file_id}, refiner_id={request.refiner_id}")
+
+    # EARLY VALIDATION: Validate encryption key before expensive processing
+    # Can be disabled with SKIP_ENCRYPTION_KEY_VALIDATION=true for debugging
+    if not os.getenv('SKIP_ENCRYPTION_KEY_VALIDATION', 'false').lower() == 'true':
+        try:
+            from refiner.services.validation import validate_encryption_key_comprehensive
+            derived_refinement_key = validate_encryption_key_comprehensive(request.encryption_key)
+            vana.logging.info(f"Encryption key validation passed for file {request.file_id}")
+        except Exception as e:
+            # All validation exceptions should be properly typed, but catch any unexpected ones
+            if hasattr(e, 'error_code'):
+                raise  # Re-raise structured validation exceptions as-is
+            else:
+                raise RefinementBaseException(
+                    status_code=500,
+                    message=f"Encryption key validation failed unexpectedly: {str(e)}",
+                    error_code="ENCRYPTION_KEY_VALIDATION_ERROR"
+                )
+    else:
+        vana.logging.warning("Encryption key validation SKIPPED due to SKIP_ENCRYPTION_KEY_VALIDATION=true")
+        # Still need to derive the key for later use
+        from cryptography.hazmat.backends import default_backend
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+        
+        hkdf = HKDF(
+            algorithm=hashes.SHA256(),
+            length=64,
+            salt=None,
+            info=b'query-engine',
+            backend=default_backend()
+        )
+        master_key_bytes = bytes.fromhex(request.encryption_key.removeprefix('0x'))
+        derived_refinement_key = '0x' + hkdf.derive(master_key_bytes).hex()
+
+    # Continue with existing refinement logic...
+    # Get file info from client (validation already confirmed it exists)
     file_info = client.get_file(request.file_id)
     if not file_info:
         raise RefinementBaseException(
@@ -162,16 +199,9 @@ def refine(
             )
         vana.logging.info(f"DLP public key for DLP ID {dlp_id}: {dlp_pub_key}")
 
-        # 4. Generate Refinement Encryption Key (REK) from the user's original encryption key
-        hkdf = HKDF(
-            algorithm=hashes.SHA256(),
-            length=64,
-            salt=None,
-            info=b'query-engine',
-            backend=default_backend()
-        )
-        master_key_bytes = bytes.fromhex(request.encryption_key.removeprefix('0x'))
-        refinement_encryption_key = '0x' + hkdf.derive(master_key_bytes).hex()
+        # 4. Use the already-derived Refinement Encryption Key (REK)
+        # (Key was already derived and validated during early validation)
+        refinement_encryption_key = derived_refinement_key
         encrypted_refinement_encryption_key, ephemeral_sk, nonce = ecies_encrypt(dlp_pub_key,
                                                                                  refinement_encryption_key.encode())
         vana.logging.info(f"Encrypted encryption key: {encrypted_refinement_encryption_key.hex()}")
@@ -263,48 +293,28 @@ def refine(
             message=f"Refinement completed successfully. Output URL: {docker_run_result.output_data.refinement_url}"
         )
 
-        # 6. Add refinement to the data registry
-        
-        # Ensure the refinement URL is a valid URL and the file is accessible
-        validation_file_path = None
-        try:
-            vana.logging.info(f"Validating refinement URL: {docker_run_result.output_data.refinement_url}")
-            validation_file_path = download_file(docker_run_result.output_data.refinement_url)
-            validation_file_size = os.path.getsize(validation_file_path) if os.path.exists(validation_file_path) else 0
-            vana.logging.info(f"Successfully validated refinement URL, file size: {validation_file_size} bytes")
+        # 6. Validate refinement output before adding to registry
+        # Can be disabled with SKIP_REFINEMENT_OUTPUT_VALIDATION=true for debugging
+        if not os.getenv('SKIP_REFINEMENT_OUTPUT_VALIDATION', 'false').lower() == 'true':
+            try:
+                from refiner.services.validation import validate_refinement_output
+                validate_refinement_output(docker_run_result.output_data.refinement_url, refinement_encryption_key)
+                vana.logging.info("Refinement output validation passed")
+            except Exception as e:
+                # All validation exceptions should be properly typed, but catch any unexpected ones
+                if hasattr(e, 'error_code'):
+                    raise  # Re-raise structured validation exceptions as-is
+                else:
+                    raise RefinementBaseException(
+                        status_code=500,
+                        message=f"Refinement output validation failed unexpectedly: {str(e)}",
+                        error_code="REFINEMENT_OUTPUT_VALIDATION_ERROR",
+                        details={"refinement_url": docker_run_result.output_data.refinement_url}
+                    )
+        else:
+            vana.logging.warning("Refinement output validation SKIPPED due to SKIP_REFINEMENT_OUTPUT_VALIDATION=true")
 
-            if validation_file_size == 0:
-                raise RefinementBaseException(
-                    status_code=400,
-                    message="Refinement URL points to an empty file",
-                    error_code="REFINEMENT_URL_EMPTY_FILE"
-                )
-        except FileDownloadError as e:
-            vana.logging.error(f"Refinement URL validation failed: {e.details.get('error', str(e))}")
-            raise RefinementBaseException(
-                status_code=400,
-                message=f"Refinement URL is not accessible: {e.details.get('error', str(e))}",
-                error_code="REFINEMENT_URL_INVALID",
-                details={"refinement_url": docker_run_result.output_data.refinement_url}
-            )
-        except Exception as e:
-            vana.logging.error(f"Unexpected error during refinement URL validation: {e}")
-            raise RefinementBaseException(
-                status_code=500,
-                message=f"Failed to validate refinement URL: {str(e)}",
-                error_code="REFINEMENT_URL_VALIDATION_ERROR",
-                details={"refinement_url": docker_run_result.output_data.refinement_url}
-            )
-        finally:
-            # Clean up the validation file
-            if validation_file_path and os.path.exists(validation_file_path):
-                try:
-                    validation_temp_dir = os.path.dirname(validation_file_path)
-                    if os.path.isdir(validation_temp_dir):
-                        shutil.rmtree(validation_temp_dir)
-                        vana.logging.info(f"Cleaned up validation temporary directory: {validation_temp_dir}")
-                except Exception as cleanup_e:
-                    vana.logging.warning(f"Failed to clean up validation temporary directory: {cleanup_e}")
+        # 7. Add refinement to the data registry
 
         # Write the refinement to the data registry
         transaction_hash, transaction_receipt = client.add_refinement_with_permission(
