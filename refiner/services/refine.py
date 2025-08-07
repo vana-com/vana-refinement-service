@@ -10,7 +10,7 @@ from refiner.middleware.log_request_id_handler import request_id_context
 from refiner.models.models import RefinementRequest, RefinementResponse
 from refiner.utils.cryptography import decrypt_file, ecies_encrypt
 from refiner.utils.docker import run_signed_container
-from refiner.utils.files import download_file, detect_file_type
+from refiner.utils.files import download_file, detect_file_type, should_apply_file_type_detection
 from refiner.services.health import get_health_service
 from refiner.services.refiner_logging import get_refiner_logging_service
 
@@ -162,15 +162,20 @@ def refine(
         if not os.path.exists(decrypted_file_path) or decrypted_file_size == 0:
             raise FileDecryptionError(f"Decrypted file is empty or does not exist: {decrypted_file_path}")
         
-        # Detect + correct the decrypted file type based on the content
-        detected_extension = detect_file_type(decrypted_file_path)
+        # Only apply file type detection when the current extension is obviously wrong or missing
+        # This prevents breaking refiners that expect specific file extensions (e.g., CSV)
         current_extension = os.path.splitext(decrypted_file_path)[1]
-
-        if detected_extension != current_extension:
-            new_path = os.path.splitext(decrypted_file_path)[0] + detected_extension
-            os.rename(decrypted_file_path, new_path)
-            decrypted_file_path = new_path
-            vana.logging.info(f"Decrypted file type detected as {detected_extension} based on content")
+        
+        if should_apply_file_type_detection(current_extension):
+            detected_extension = detect_file_type(decrypted_file_path)
+            
+            if detected_extension != current_extension:
+                new_path = os.path.splitext(decrypted_file_path)[0] + detected_extension
+                os.rename(decrypted_file_path, new_path)
+                decrypted_file_path = new_path
+                vana.logging.info(f"Decrypted file type detected as {detected_extension} based on content (was {current_extension or 'no extension'})")
+        else:
+            vana.logging.debug(f"Skipping file type detection for {current_extension} extension - trusting original extension")
 
         if os.getenv('CHAIN_NETWORK') == 'moksha' and os.getenv('DEBUG_FILES_DIR'):
             debug_dir = os.getenv('DEBUG_FILES_DIR')
