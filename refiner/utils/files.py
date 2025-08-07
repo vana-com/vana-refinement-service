@@ -151,9 +151,38 @@ def download_file(file_url: str) -> str:
         raise FileDownloadError(file_url=file_url, error=str(e))
 
 
+def should_apply_file_type_detection(current_extension):
+    """
+    Determine if file type detection should be applied based on the current extension.
+    Only apply detection when the extension is obviously wrong or missing.
+    
+    Args:
+        current_extension (str): Current file extension with leading dot (e.g., '.txt')
+        
+    Returns:
+        bool: True if detection should be applied, False otherwise
+    """
+    if not current_extension:
+        # No extension - detection is helpful
+        return True
+    
+    # Normalize to lowercase for comparison
+    ext_lower = current_extension.lower()
+    
+    # Extensions that are obviously wrong or generic - apply detection
+    generic_extensions = {'.dat', '.tmp', '.file', '.unknown', '.enc', '.encrypted'}
+    
+    if ext_lower in generic_extensions:
+        return True
+    
+    # For all other extensions (.csv, .json, .txt, .zip, etc.), trust the original
+    # This prevents breaking refiners that expect specific file types
+    return False
+
+
 def detect_file_type(file_path):
     """
-    Detect file type based on content analysis.
+    Conservative file type detection that tries to avoid false positives.
     
     Args:
         file_path (str): Path to the file to analyze
@@ -167,7 +196,7 @@ def detect_file_type(file_path):
         mime = magic.Magic(mime=True)
         mime_type = mime.from_file(file_path)
         
-        # Map common MIME types to extensions
+        # Map common MIME types to extensions - be more specific about text files
         mime_to_ext = {
             'application/json': '.json',
             'application/zip': '.zip',
@@ -177,8 +206,7 @@ def detect_file_type(file_path):
             'application/x-bzip2': '.bz2',
             'application/x-xz': '.xz',
             'application/x-7z-compressed': '.7z',
-            'text/plain': '.txt',
-            'text/csv': '.csv',
+            'text/csv': '.csv',  # Prioritize CSV detection
             'text/html': '.html',
             'application/pdf': '.pdf',
             'image/jpeg': '.jpg',
@@ -188,11 +216,16 @@ def detect_file_type(file_path):
         if mime_type in mime_to_ext:
             return mime_to_ext[mime_type]
         
-        # For generic types, do more specific detection
+        # For text/plain, be more conservative - check for specific formats first
         if mime_type == 'text/plain':
             # Check if it's JSON
             if is_json_file(file_path):
                 return '.json'
+            # Check if it's CSV (more specific check)
+            if is_csv_file(file_path):
+                return '.csv'
+            # Only fall back to .txt if we're confident it's not a structured format
+            return '.txt'
             
     except ImportError:
         vana.logging.debug("python-magic not available, falling back to basic detection")
@@ -202,6 +235,10 @@ def detect_file_type(file_path):
     # Check if it's JSON
     if is_json_file(file_path):
         return '.json'
+    
+    # Check if it's CSV
+    if is_csv_file(file_path):
+        return '.csv'
     
     # Check if it's text
     if is_text_file(file_path):
@@ -227,6 +264,111 @@ def detect_file_type(file_path):
     # Default if no detection succeeds
     return os.path.splitext(file_path)[1] or '.bin'
 
+
+def is_csv_file(file_path, sample_lines=10):
+    """
+    Check if file appears to be a CSV by examining structure using Python's csv module.
+    Supports multiple delimiter types: comma (,), semicolon (;), tab (\t), pipe (|)
+    
+    Args:
+        file_path (str): Path to the file to analyze
+        sample_lines (int): Number of lines to sample for analysis
+        
+    Returns:
+        bool: True if file appears to be CSV format
+    """
+    try:
+        import csv
+        import io
+        
+        # Read sample content
+        with open(file_path, 'r', encoding='utf-8') as f:
+            sample_content = []
+            for i, line in enumerate(f):
+                if i >= sample_lines:
+                    break
+                sample_content.append(line.rstrip('\n\r'))
+        
+        if len(sample_content) < 2:
+            return False
+        
+        # Try different delimiters
+        delimiters = [',', ';', '\t', '|']
+        
+        for delimiter in delimiters:
+            if _is_csv_with_sniffer(sample_content, delimiter):
+                return True
+        
+        return False
+        
+    except (UnicodeDecodeError, IOError):
+        return False
+
+
+def _is_csv_with_sniffer(lines, delimiter):
+    """
+    Use Python's csv.Sniffer to detect if content is CSV with given delimiter.
+    
+    Args:
+        lines (list): List of text lines to analyze
+        delimiter (str): Delimiter to test
+        
+    Returns:
+        bool: True if lines appear to be CSV with this delimiter
+    """
+    import csv
+    import io
+    
+    if not lines or len(lines) < 2:
+        return False
+    
+    # Join lines back into text for csv.Sniffer
+    sample_text = '\n'.join(lines)
+    
+    try:
+        # Use csv.Sniffer to detect if this looks like CSV
+        sniffer = csv.Sniffer()
+        
+        # First, check if the sniffer can detect this delimiter
+        try:
+            dialect = sniffer.sniff(sample_text, delimiters=delimiter)
+            if dialect.delimiter != delimiter:
+                return False
+        except csv.Error:
+            return False
+        
+        # Additional consistency checks using our simpler logic
+        reader = csv.reader(io.StringIO(sample_text), delimiter=delimiter)
+        rows = list(reader)
+        
+        if len(rows) < 2:
+            return False
+        
+        # Check for consistent column counts (allow some variation for headers)
+        column_counts = [len(row) for row in rows if row]  # Skip empty rows
+        
+        if not column_counts or max(column_counts) <= 1:  # Need multiple columns
+            return False
+        
+        # Most rows should have similar column counts
+        from collections import Counter
+        count_frequency = Counter(column_counts)
+        most_common_count, frequency = count_frequency.most_common(1)[0]
+        
+        # At least 70% of rows should have the same column count for consistency
+        consistency_ratio = frequency / len(column_counts)
+        if consistency_ratio < 0.7:
+            return False
+        
+        # At least 60% of lines should have multiple columns
+        multi_column_rows = sum(1 for count in column_counts if count > 1)
+        if multi_column_rows / len(column_counts) < 0.6:
+            return False
+        
+        return True
+        
+    except (csv.Error, UnicodeDecodeError):
+        return False
 
 def is_json_file(file_path):
     """Check if file contains valid JSON."""
