@@ -9,7 +9,6 @@ This module provides structured validation for:
 import os
 import tempfile
 import shutil
-from typing import Optional, Dict, Any
 
 import vana
 import requests
@@ -17,42 +16,10 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-from refiner.errors.exceptions import RefinementBaseException
-
-
-class EncryptionKeyValidationError(RefinementBaseException):
-    """Specific exception for encryption key validation failures"""
-    
-    def __init__(self, message: str, guidance: str, error_code: str = "INVALID_ENCRYPTION_KEY"):
-        super().__init__(
-            status_code=400,
-            message=message,
-            error_code=error_code,
-            details={
-                "guidance": guidance,
-                "expected_format": "Hex string starting with '0x' (e.g., '0x1234abcd...')",
-                "key_type": "Original file encryption key (EK), not encrypted encryption key (EEK)"
-            }
-        )
-
-
-class RefinementOutputValidationError(RefinementBaseException):
-    """Specific exception for refinement output validation failures"""
-    
-    def __init__(self, message: str, refinement_url: str, error_code: str):
-        super().__init__(
-            status_code=400,
-            message=message,
-            error_code=error_code,
-            details={
-                "refinement_url": refinement_url,
-                "troubleshooting": {
-                    "check_ipfs_accessibility": "Ensure the IPFS URL is publicly accessible",
-                    "verify_file_encryption": "Confirm the file was encrypted with the derived refinement key",
-                    "check_file_content": "Ensure the refined output is not empty"
-                }
-            }
-        )
+from refiner.errors.exceptions import (
+    EncryptionKeyValidationError,
+    RefinementOutputValidationError
+)
 
 
 def validate_encryption_key_format(encryption_key: str) -> None:
