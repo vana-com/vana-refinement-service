@@ -51,20 +51,20 @@ perform_cleanup() {
 
     # 2. Prune all stopped Docker containers.
     # This is safe to run on startup as no application containers should be running yet.
-    echo "Pruning stopped Docker containers..."
-    docker container prune -f
+    #echo "Pruning stopped Docker containers..."
+    #docker container prune -f
 
     # 3. Prune the Docker builder cache.
-    echo "Pruning Docker builder cache..."
-    docker builder prune -af
+    #echo "Pruning Docker builder cache..."
+    #docker builder prune -af
 
     # 4. Prune dangling and unused Docker images.
-    echo "Pruning unused images..."
-    docker image prune -af
+    #echo "Pruning unused images..."
+    #docker image prune -af
 
     # 5. Run the standard volume prune for any other dangling volumes.
-    echo "Pruning any other unused volumes..."
-    docker volume prune -f
+    #echo "Pruning any other unused volumes..."
+    #docker volume prune -f
 
     echo "--- Comprehensive cleanup finished ---"
 }
