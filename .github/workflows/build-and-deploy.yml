@@ -108,9 +108,9 @@ jobs:
           phala-cloud-api-key: ${{ secrets.PHALA_CLOUD_API_KEY }}
           vm-name: ${{ steps.set-env.outputs.vm_name }}
           vm-id: ${{ steps.doppler.outputs.PHALA_VM_ID }}
-          image: ${{ steps.set-env.outputs.phala_image }}
+          image: vanaorg/vana-refinement-service:main-24dd660
           docker-compose-file: ${{ steps.set-env.outputs.compose_file }}
-          docker-tag: ${{ needs.build.outputs.image_tag }}
+          docker-tag: main-24dd660
           prelaunch-script-file: 'prelaunch.sh'
           doppler-secrets-json: ${{ toJSON(steps.doppler.outputs) }}
           exclude-env-vars: '["PHALA_VM_ID"]'
