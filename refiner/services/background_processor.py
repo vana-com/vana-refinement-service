@@ -71,7 +71,12 @@ class BackgroundRefinementProcessor:
         logger.info("Background processor worker loop started")
         
         last_cleanup = time.time()
-        cleanup_interval = 300  # Run cleanup every 5 minutes
+        last_volume_cleanup = time.time()
+        last_db_cleanup = time.time()
+
+        cleanup_interval = 300  # Run orphaned job cleanup every 5 minutes
+        volume_cleanup_interval = int(os.getenv('VOLUME_CLEANUP_INTERVAL_SECONDS', '300'))  # Every 5 minutes by default
+        db_cleanup_interval = int(os.getenv('DB_CLEANUP_INTERVAL_SECONDS', '3600'))  # Every hour by default
         
         while not self.stop_event.is_set():
             try:
@@ -90,6 +95,29 @@ class BackgroundRefinementProcessor:
                     except Exception as cleanup_error:
                         logger.error(f"Error during orphaned job cleanup: {cleanup_error}")
                 
+                # Periodically clean up orphaned Docker volumes
+                if current_time - last_volume_cleanup > volume_cleanup_interval:
+                    try:
+                        from refiner.utils.docker import cleanup_orphaned_volumes
+                        volume_age_minutes = int(os.getenv('ORPHANED_VOLUME_MAX_AGE_MINUTES', '60'))
+                        removed_volumes = cleanup_orphaned_volumes(max_age_minutes=volume_age_minutes)
+                        if removed_volumes > 0:
+                            logger.info(f"Periodic cleanup: removed {removed_volumes} orphaned Docker volumes")
+                        last_volume_cleanup = current_time
+                    except Exception as volume_cleanup_error:
+                        logger.error(f"Error during orphaned volume cleanup: {volume_cleanup_error}")
+
+                # Periodically clean up old database records
+                if current_time - last_db_cleanup > db_cleanup_interval:
+                    try:
+                        retention_days = int(os.getenv('JOB_RETENTION_DAYS', '30'))
+                        deleted_count = refinement_jobs_store.cleanup_old_jobs(retention_days=retention_days)
+                        if deleted_count > 0:
+                            logger.info(f"Database cleanup: removed {deleted_count} old job records")
+                        last_db_cleanup = current_time
+                    except Exception as db_cleanup_error:
+                        logger.error(f"Error during database cleanup: {db_cleanup_error}")
+
                 # Check if we can process more jobs
                 with self._jobs_lock:
                     current_job_count = len(self.current_jobs)
