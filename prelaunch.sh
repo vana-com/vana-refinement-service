@@ -64,17 +64,17 @@ perform_cleanup() {
 
     # 5. Forcefully delete orphaned 'input-*' and 'output-*' volumes.
     # The standard `docker volume prune` is not working, so we target them by name.
-    echo "Searching for and forcefully deleting orphaned 'input-*' and 'output-*' volumes..."
-    ORPHANED_VOLUMES=$(docker volume ls -q | grep -E '^(input-|output-)')
-    if [ -n "$ORPHANED_VOLUMES" ]; then
-        echo "Found the following orphaned volumes to delete:"
-        echo "$ORPHANED_VOLUMES"
-        # The -r flag prevents `xargs` from running `docker volume rm` if no volumes are found.
-        echo "$ORPHANED_VOLUMES" | xargs -r docker volume rm
-        echo "Orphaned volumes deleted."
-    else
-        echo "No orphaned 'input-*' or 'output-*' volumes found."
-    fi
+    echo "Temporary SKIP Searching for and forcefully deleting orphaned 'input-*' and 'output-*' volumes..."
+#    ORPHANED_VOLUMES=$(docker volume ls -q | grep -E '^(input-|output-)')
+#    if [ -n "$ORPHANED_VOLUMES" ]; then
+#        echo "Found the following orphaned volumes to delete:"
+#        echo "$ORPHANED_VOLUMES"
+#        # The -r flag prevents `xargs` from running `docker volume rm` if no volumes are found.
+#        echo "$ORPHANED_VOLUMES" | xargs -r docker volume rm
+#        echo "Orphaned volumes deleted."
+#    else
+#        echo "No orphaned 'input-*' or 'output-*' volumes found."
+#    fi
 
     # 6. Run the standard volume prune for any other dangling volumes.
     echo "Pruning any other unused volumes..."
