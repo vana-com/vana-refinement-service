@@ -51,20 +51,34 @@ perform_cleanup() {
 
     # 2. Prune all stopped Docker containers.
     # This is safe to run on startup as no application containers should be running yet.
-    #echo "Pruning stopped Docker containers..."
-    #docker container prune -f
+    echo "Pruning stopped Docker containers..."
+    docker container prune -f
 
     # 3. Prune the Docker builder cache.
-    #echo "Pruning Docker builder cache..."
-    #docker builder prune -af
+    echo "Pruning Docker builder cache..."
+    docker builder prune -af
 
     # 4. Prune dangling and unused Docker images.
-    #echo "Pruning unused images..."
-    #docker image prune -af
+    echo "Pruning unused images..."
+    docker image prune -af
 
-    # 5. Run the standard volume prune for any other dangling volumes.
-    #echo "Pruning any other unused volumes..."
-    #docker volume prune -f
+    # 5. Forcefully delete orphaned 'input-*' and 'output-*' volumes.
+    # The standard `docker volume prune` is not working, so we target them by name.
+    echo "Searching for and forcefully deleting orphaned 'input-*' and 'output-*' volumes..."
+    ORPHANED_VOLUMES=$(docker volume ls -q | grep -E '^(input-|output-)')
+    if [ -n "$ORPHANED_VOLUMES" ]; then
+        echo "Found the following orphaned volumes to delete:"
+        echo "$ORPHANED_VOLUMES"
+        # The -r flag prevents `xargs` from running `docker volume rm` if no volumes are found.
+        echo "$ORPHANED_VOLUMES" | xargs -r docker volume rm
+        echo "Orphaned volumes deleted."
+    else
+        echo "No orphaned 'input-*' or 'output-*' volumes found."
+    fi
+
+    # 6. Run the standard volume prune for any other dangling volumes.
+    echo "Pruning any other unused volumes..."
+    docker volume prune -f
 
     echo "--- Comprehensive cleanup finished ---"
 }
