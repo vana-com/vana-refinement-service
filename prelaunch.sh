@@ -64,7 +64,7 @@ perform_cleanup() {
 
     # 5. Forcefully delete orphaned 'input-*' and 'output-*' volumes.
     # The standard `docker volume prune` is not working, so we target them by name.
-    echo "Searching for and forcefully deleting orphaned 'input-*' and 'output-*' volumes..."
+    echo "Temporary SKIP Searching for and forcefully deleting orphaned 'input-*' and 'output-*' volumes..."
     ORPHANED_VOLUMES=$(docker volume ls -q | grep -E '^(input-|output-)')
     if [ -n "$ORPHANED_VOLUMES" ]; then
         echo "Found the following orphaned volumes to delete:"
