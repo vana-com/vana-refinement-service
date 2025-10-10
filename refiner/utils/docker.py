@@ -52,6 +52,88 @@ def get_docker_client():
     return client
 
 
+def cleanup_orphaned_volumes(max_age_minutes=60):
+    """
+    Clean up orphaned Docker volumes that match the refinement volume naming pattern.
+    This is called periodically to prevent disk space leaks from crashed processes.
+
+    Args:
+        max_age_minutes: Only remove volumes older than this many minutes (default: 60)
+
+    Returns:
+        int: Number of volumes removed
+    """
+    try:
+        client = get_docker_client()
+        removed_count = 0
+
+        # Get all volumes
+        all_volumes = client.volumes.list()
+
+        # Current time for age calculation
+        import time
+        current_time = time.time()
+        cutoff_time = current_time - (max_age_minutes * 60)
+
+        for volume in all_volumes:
+            volume_name = volume.name
+
+            # Check if this is a refinement volume (input-* or output-*)
+            if not (volume_name.startswith('input-') or volume_name.startswith('output-')):
+                continue
+
+            try:
+                # Get volume details to check creation time
+                volume.reload()
+                volume_attrs = volume.attrs
+
+                # Parse creation time
+                created_at_str = volume_attrs.get('CreatedAt', '')
+                if created_at_str:
+                    # Parse ISO format timestamp
+                    from dateutil import parser
+                    try:
+                        created_at = parser.parse(created_at_str).timestamp()
+                    except:
+                        # If parsing fails, try alternate method
+                        created_at = volume_attrs.get('CreatedAt', 0)
+                        if isinstance(created_at, str):
+                            # Fallback: assume it's old if we can't parse
+                            created_at = 0
+                else:
+                    # If no creation time, assume it's old
+                    created_at = 0
+
+                # Only remove if older than cutoff
+                if created_at < cutoff_time:
+                    vana.logging.info(f"Removing orphaned volume: {volume_name} (age: {(current_time - created_at) / 60:.1f} minutes)")
+
+                    # Try to remove the volume
+                    try:
+                        volume.remove(force=True)
+                        removed_count += 1
+                        vana.logging.info(f"Successfully removed orphaned volume: {volume_name}")
+                    except docker.errors.APIError as remove_error:
+                        # Volume might be in use, skip it
+                        vana.logging.debug(f"Could not remove volume {volume_name}: {remove_error}")
+                        continue
+
+            except Exception as volume_error:
+                vana.logging.debug(f"Error processing volume {volume_name}: {volume_error}")
+                continue
+
+        if removed_count > 0:
+            vana.logging.info(f"Orphaned volume cleanup: removed {removed_count} volumes")
+        else:
+            vana.logging.debug("Orphaned volume cleanup: no volumes to remove")
+
+        return removed_count
+
+    except Exception as e:
+        vana.logging.error(f"Error during orphaned volume cleanup: {e}")
+        return 0
+
+
 def run_signed_container(
     image_url: str,
     environment: dict,
@@ -251,8 +333,8 @@ def run_signed_container(
                 vana.logging.error(error_msg)
                 cleanup_errors.append(error_msg)
 
-        # Clean up volumes with retry logic
-        def cleanup_volume_with_retry(volume_obj, volume_name, max_retries=3):
+        # Clean up volumes with retry logic and more aggressive removal
+        def cleanup_volume_with_retry(volume_obj, volume_name, max_retries=5):
             """Helper function to cleanup volume with retry logic"""
             if not volume_obj:
                 return
@@ -271,19 +353,28 @@ def run_signed_container(
                     vana.logging.warning(error_msg)
                     if attempt == max_retries - 1:  # Last attempt
                         cleanup_errors.append(error_msg)
-                        # Try alternative cleanup method as last resort
+                        # Try alternative cleanup methods as last resort
                         try:
                             vana.logging.info(f"Attempting alternative cleanup for volume: {volume_name}")
+                            # Method 1: Direct API call with force
                             client.api.remove_volume(volume_name, force=True)
-                            vana.logging.info(f"Alternative cleanup successful for volume: {volume_name}")
-                        except Exception as alt_e:
-                            alt_error_msg = f"Alternative cleanup also failed for volume {volume_name}: {str(alt_e)}"
+                            vana.logging.info(f"Alternative cleanup (API) successful for volume: {volume_name}")
+                            return
+                        except Exception as alt_e1:
+                            try:
+                                # Method 2: Prune volumes (will remove if truly orphaned)
+                                vana.logging.info(f"Attempting prune for volume: {volume_name}")
+                                client.volumes.prune(filters={'label': f'name={volume_name}'})
+                                vana.logging.info(f"Alternative cleanup (prune) attempted for volume: {volume_name}")
+                            except Exception as alt_e2:
+                                alt_error_msg = f"All cleanup methods failed for volume {volume_name}: API={alt_e1}, Prune={alt_e2}"
                             vana.logging.error(alt_error_msg)
                             cleanup_errors.append(alt_error_msg)
                     else:
-                        # Wait before retry
+                        # Wait progressively longer before retry
                         import time
-                        time.sleep(1)
+                        # Exponential backoff: 1s, 2s, 4s, 8s
+                        time.sleep(2 ** attempt)
 
         # Clean up input volume
         cleanup_volume_with_retry(input_volume, input_volume_name)

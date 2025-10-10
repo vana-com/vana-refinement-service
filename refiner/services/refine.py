@@ -375,3 +375,9 @@ def refine(
                 vana.logging.info(f"Successfully removed temporary directory: {temp_dir}")
             except Exception as e:
                 vana.logging.error(f"Failed to clean up temporary directory {temp_dir}: {e}")
+                try:
+                    import subprocess
+                    subprocess.run(['rm', '-rf', temp_dir], check=False, capture_output=True)
+                    vana.logging.info(f"Forcefully removed temporary directory: {temp_dir}")
+                except Exception as force_error:
+                    vana.logging.error(f"Even forceful removal failed for {temp_dir}: {force_error}")

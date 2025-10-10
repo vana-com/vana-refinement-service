@@ -392,6 +392,49 @@ def cleanup_orphaned_jobs(session: Session, timeout_minutes: int = 60) -> int:
         return 0
 
 @db.session_scope
+def cleanup_old_jobs(session: Session, retention_days: int = 30) -> int:
+    """
+    Clean up old completed and failed jobs from the database to prevent unbounded growth.
+    Only jobs in COMPLETED or FAILED status that are older than retention_days will be removed.
+
+    Args:
+        session: SQLAlchemy session
+        retention_days: Jobs older than this many days will be removed (default: 30)
+
+    Returns:
+        int: Number of jobs deleted
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        # Calculate the cutoff date
+        cutoff_date = datetime.now() - timedelta(days=retention_days)
+
+        # Find old completed or failed jobs
+        old_jobs = session.query(db.RefinementJobORM).filter(
+            db.RefinementJobORM.status.in_([JobStatus.COMPLETED, JobStatus.FAILED]),
+            db.RefinementJobORM.completed_at < cutoff_date
+        ).all()
+
+        if not old_jobs:
+            logger.debug(f"No jobs older than {retention_days} days to clean up")
+            return 0
+
+        # Delete the old jobs
+        job_ids = [job.job_id for job in old_jobs]
+        deleted_count = session.query(db.RefinementJobORM).filter(
+            db.RefinementJobORM.job_id.in_(job_ids)
+        ).delete(synchronize_session='fetch')
+
+        logger.info(f"Cleaned up {deleted_count} old job records (retention: {retention_days} days)")
+        return deleted_count
+
+    except Exception as e:
+        logger.error(f"Error cleaning up old jobs: {e}")
+        session.rollback()
+        return 0
+
+@db.session_scope
 def get_refiner_job_stats(session: Session, refiner_id: int) -> Dict:
     """
     Get comprehensive job statistics for a specific refiner.
