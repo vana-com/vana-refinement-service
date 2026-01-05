@@ -52,35 +52,63 @@ def get_docker_client():
     return client
 
 
-def cleanup_orphaned_volumes(max_age_minutes=60):
+def cleanup_orphaned_volumes(max_age_minutes=60, max_volumes_per_run=50, timeout_seconds=30):
     """
     Clean up orphaned Docker volumes that match the refinement volume naming pattern.
     This is called periodically to prevent disk space leaks from crashed processes.
+    
+    IMPORTANT: This function is designed to be non-blocking by limiting the number
+    of volumes processed per run and using timeouts to prevent blocking the worker loop.
 
     Args:
         max_age_minutes: Only remove volumes older than this many minutes (default: 60)
+        max_volumes_per_run: Maximum number of volumes to process per invocation (default: 50)
+        timeout_seconds: Maximum time to spend on cleanup per run (default: 30)
 
     Returns:
         int: Number of volumes removed
     """
+    import time
+    start_time = time.time()
+    
     try:
         client = get_docker_client()
         removed_count = 0
+        processed_count = 0
 
-        # Get all volumes
-        all_volumes = client.volumes.list()
+        # Get all volumes - this should be fast even with many volumes
+        try:
+            all_volumes = client.volumes.list()
+        except Exception as list_error:
+            vana.logging.warning(f"Failed to list Docker volumes: {list_error}")
+            return 0
 
         # Current time for age calculation
-        import time
         current_time = time.time()
         cutoff_time = current_time - (max_age_minutes * 60)
 
-        for volume in all_volumes:
-            volume_name = volume.name
+        # Filter to only refinement volumes first (fast, no API calls)
+        refinement_volumes = [
+            v for v in all_volumes 
+            if v.name.startswith('input-') or v.name.startswith('output-')
+        ]
+        
+        if refinement_volumes:
+            vana.logging.debug(f"Found {len(refinement_volumes)} refinement volumes to check")
 
-            # Check if this is a refinement volume (input-* or output-*)
-            if not (volume_name.startswith('input-') or volume_name.startswith('output-')):
-                continue
+        for volume in refinement_volumes:
+            # Check timeout - don't block the worker loop for too long
+            if time.time() - start_time > timeout_seconds:
+                vana.logging.info(f"Volume cleanup timeout reached after {timeout_seconds}s, processed {processed_count} volumes, removed {removed_count}")
+                break
+                
+            # Check batch limit - process incrementally across multiple runs
+            if processed_count >= max_volumes_per_run:
+                vana.logging.debug(f"Volume cleanup batch limit reached ({max_volumes_per_run}), removed {removed_count}")
+                break
+
+            volume_name = volume.name
+            processed_count += 1
 
             try:
                 # Get volume details to check creation time
@@ -122,10 +150,11 @@ def cleanup_orphaned_volumes(max_age_minutes=60):
                 vana.logging.debug(f"Error processing volume {volume_name}: {volume_error}")
                 continue
 
+        elapsed = time.time() - start_time
         if removed_count > 0:
-            vana.logging.info(f"Orphaned volume cleanup: removed {removed_count} volumes")
+            vana.logging.info(f"Orphaned volume cleanup: removed {removed_count}/{processed_count} volumes in {elapsed:.1f}s")
         else:
-            vana.logging.debug("Orphaned volume cleanup: no volumes to remove")
+            vana.logging.debug(f"Orphaned volume cleanup: no volumes to remove (checked {processed_count} in {elapsed:.1f}s)")
 
         return removed_count
 

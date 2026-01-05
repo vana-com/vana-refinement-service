@@ -107,13 +107,23 @@ class BackgroundRefinementProcessor:
                     except Exception as volume_cleanup_error:
                         logger.error(f"Error during orphaned volume cleanup: {volume_cleanup_error}")
 
-                # Periodically clean up old database records
+                # Periodically clean up old database records and checkpoint WAL
                 if current_time - last_db_cleanup > db_cleanup_interval:
                     try:
                         retention_days = int(os.getenv('JOB_RETENTION_DAYS', '30'))
-                        deleted_count = refinement_jobs_store.cleanup_old_jobs(retention_days=retention_days)
+                        batch_size = int(os.getenv('JOB_CLEANUP_BATCH_SIZE', '5000'))
+                        deleted_count = refinement_jobs_store.cleanup_old_jobs(
+                            retention_days=retention_days, 
+                            batch_size=batch_size
+                        )
                         if deleted_count > 0:
                             logger.info(f"Database cleanup: removed {deleted_count} old job records")
+                        
+                        # Checkpoint WAL to prevent unbounded growth
+                        # This moves data from WAL to main DB and truncates the WAL file
+                        from refiner.stores.db import checkpoint_wal
+                        checkpoint_wal()
+                        
                         last_db_cleanup = current_time
                     except Exception as db_cleanup_error:
                         logger.error(f"Error during database cleanup: {db_cleanup_error}")

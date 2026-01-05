@@ -102,6 +102,10 @@ class SystemMetrics(BaseModel):
     disk_free_gb: float = Field(..., description="Free disk space in GB")
     load_average: Optional[List[float]] = Field(None, description="System load average")
     docker_healthy: bool = Field(..., description="Docker daemon health status")
+    # Database metrics
+    database_size_mb: Optional[float] = Field(None, description="SQLite database file size in MB")
+    database_wal_size_mb: Optional[float] = Field(None, description="SQLite WAL file size in MB")
+    database_total_size_mb: Optional[float] = Field(None, description="Total database size including WAL in MB")
     error: Optional[str] = Field(None, description="Error message if metrics collection failed")
 
 
@@ -115,6 +119,10 @@ class RefinementMetrics(BaseModel):
     avg_processing_time_seconds: float = Field(0.0, description="Average processing time in seconds")
     seconds_since_last_success: Optional[int] = Field(None, description="Seconds since last successful refinement")
     seconds_since_last_failure: Optional[int] = Field(None, description="Seconds since last failed refinement")
+    # Pending job metrics - helps identify stuck jobs
+    pending_refinements: int = Field(0, description="Number of jobs in SUBMITTED status waiting to be processed")
+    processing_refinements: int = Field(0, description="Number of jobs currently being processed")
+    oldest_pending_job_age_seconds: Optional[int] = Field(None, description="Age of the oldest pending job in seconds")
 
 
 class RecentActivity(BaseModel):

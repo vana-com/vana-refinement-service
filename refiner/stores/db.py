@@ -126,6 +126,41 @@ def verify_wal_mode():
         logger.error(f"Failed to verify WAL mode: {e}")
         return False
 
+def checkpoint_wal():
+    """
+    Force a WAL checkpoint to prevent unbounded WAL file growth.
+    
+    TRUNCATE mode moves all data from WAL to main database and truncates the WAL file.
+    This should be called periodically during cleanup to prevent WAL from growing too large.
+    
+    Returns:
+        tuple: (busy, log, checkpointed) - SQLite checkpoint results, or None on error
+               - busy: number of pages that could not be checkpointed (readers blocking)
+               - log: total pages in WAL
+               - checkpointed: pages successfully checkpointed
+    """
+    try:
+        with get_db_session() as session:
+            # TRUNCATE mode: checkpoint and truncate WAL file if possible
+            # If readers are blocking, it will checkpoint what it can
+            result = session.execute(text("PRAGMA wal_checkpoint(TRUNCATE)")).fetchone()
+            
+            if result:
+                busy, log, checkpointed = result
+                if busy == 0 and log == checkpointed:
+                    logger.info(f"WAL checkpoint complete: {checkpointed} pages checkpointed, WAL truncated")
+                elif busy > 0:
+                    logger.info(f"WAL checkpoint partial: {checkpointed}/{log} pages checkpointed, {busy} pages busy (readers blocking)")
+                else:
+                    logger.info(f"WAL checkpoint: log={log}, checkpointed={checkpointed}, busy={busy}")
+                return (busy, log, checkpointed)
+            else:
+                logger.warning("WAL checkpoint returned no result")
+                return None
+    except Exception as e:
+        logger.error(f"Failed to checkpoint WAL: {e}")
+        return None
+
 @contextmanager
 def get_db_session() -> Generator[Session, None, None]:
     """

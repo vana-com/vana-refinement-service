@@ -6,6 +6,7 @@ echo "----------------------------------------------"
 set -e
 
 # Function to log the current state of disk usage for diagnostics.
+# Optimized for fast startup - only essential metrics, no slow scans.
 log_disk_state() {
     TITLE=$1
     echo ""
@@ -18,19 +19,14 @@ log_disk_state() {
     df -h
     echo ""
 
-    echo "--- Docker System-Wide Usage (docker system df -v) ---"
-    # Use -v for verbose output to see all items, not just reclaimable space.
-    docker system df -v
+    echo "--- Docker System Summary (docker system df) ---"
+    # Use non-verbose mode for fast output
+    docker system df
     echo ""
 
-    echo "--- Top 20 Largest Items in /var/lib/docker (du) ---"
-    echo "(This may take a moment...)"
-    # This command finds the largest files/directories, helping to pinpoint the exact source of bloat.
-    du -ah /var/lib/docker 2>/dev/null | sort -rh | head -n 20
-    echo ""
-
-    echo "--- Summary of /tmp directory usage ---"
-    du -sh /tmp
+    echo "--- Container sizes (sorted by size) ---"
+    # Quick container size check - this is where the 1.8TB leak was found
+    docker ps -a --format "table {{.Names}}\t{{.Size}}\t{{.Status}}" | head -20
     echo ""
 
     echo "==================== END REPORT: $TITLE ===================="
