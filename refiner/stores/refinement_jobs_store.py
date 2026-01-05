@@ -282,6 +282,49 @@ def get_jobs_by_status(session: Session, status: str, limit: int = 100) -> List[
         return []
 
 @db.session_scope
+def get_pending_job_stats(session: Session) -> Dict:
+    """
+    Get statistics about pending and processing jobs for health monitoring.
+    This is an efficient query that doesn't load full job records.
+    
+    Returns:
+        Dict with keys:
+            - pending_count: Number of jobs in SUBMITTED status
+            - processing_count: Number of jobs in PROCESSING status
+            - oldest_pending_submitted_at: Timestamp of oldest pending job (or None)
+    """
+    try:
+        from sqlalchemy import func
+        
+        # Count pending jobs
+        pending_count = session.query(func.count(db.RefinementJobORM.job_id)).filter(
+            db.RefinementJobORM.status == JobStatus.SUBMITTED
+        ).scalar() or 0
+        
+        # Count processing jobs
+        processing_count = session.query(func.count(db.RefinementJobORM.job_id)).filter(
+            db.RefinementJobORM.status == JobStatus.PROCESSING
+        ).scalar() or 0
+        
+        # Get oldest pending job timestamp
+        oldest_pending = session.query(func.min(db.RefinementJobORM.submitted_at)).filter(
+            db.RefinementJobORM.status == JobStatus.SUBMITTED
+        ).scalar()
+        
+        return {
+            "pending_count": pending_count,
+            "processing_count": processing_count,
+            "oldest_pending_submitted_at": oldest_pending
+        }
+    except Exception as e:
+        logger.error(f"Error getting pending job stats: {e}")
+        return {
+            "pending_count": 0,
+            "processing_count": 0,
+            "oldest_pending_submitted_at": None
+        }
+
+@db.session_scope
 def claim_pending_jobs(session: Session, limit: int = 10) -> List[RefinementJob]:
     """
     Atomically claim pending jobs for processing by updating their status to PROCESSING.
@@ -392,14 +435,18 @@ def cleanup_orphaned_jobs(session: Session, timeout_minutes: int = 60) -> int:
         return 0
 
 @db.session_scope
-def cleanup_old_jobs(session: Session, retention_days: int = 30) -> int:
+def cleanup_old_jobs(session: Session, retention_days: int = 30, batch_size: int = 5000) -> int:
     """
     Clean up old completed and failed jobs from the database to prevent unbounded growth.
     Only jobs in COMPLETED or FAILED status that are older than retention_days will be removed.
+    
+    Uses a subquery-based delete to avoid SQLite's bind parameter limit and memory issues.
+    Batching is handled via LIMIT to prevent long-running transactions.
 
     Args:
         session: SQLAlchemy session
         retention_days: Jobs older than this many days will be removed (default: 30)
+        batch_size: Maximum number of jobs to delete per invocation (default: 5000)
 
     Returns:
         int: Number of jobs deleted
@@ -410,23 +457,33 @@ def cleanup_old_jobs(session: Session, retention_days: int = 30) -> int:
         # Calculate the cutoff date
         cutoff_date = datetime.now() - timedelta(days=retention_days)
 
-        # Find old completed or failed jobs
-        old_jobs = session.query(db.RefinementJobORM).filter(
-            db.RefinementJobORM.status.in_([JobStatus.COMPLETED, JobStatus.FAILED]),
-            db.RefinementJobORM.completed_at < cutoff_date
-        ).all()
-
-        if not old_jobs:
+        # Use raw SQL with subquery to avoid SQLite's bind parameter limit
+        # This is much more efficient than SELECT + DELETE with IN clause for large datasets
+        result = session.execute(
+            text("""
+                DELETE FROM refinement_jobs 
+                WHERE job_id IN (
+                    SELECT job_id FROM refinement_jobs 
+                    WHERE status IN (:completed, :failed)
+                    AND completed_at < :cutoff_date
+                    LIMIT :batch_size
+                )
+            """),
+            {
+                "completed": JobStatus.COMPLETED,
+                "failed": JobStatus.FAILED,
+                "cutoff_date": cutoff_date,
+                "batch_size": batch_size
+            }
+        )
+        
+        deleted_count = result.rowcount
+        
+        if deleted_count > 0:
+            logger.info(f"Cleaned up {deleted_count} old job records (retention: {retention_days} days)")
+        else:
             logger.debug(f"No jobs older than {retention_days} days to clean up")
-            return 0
-
-        # Delete the old jobs
-        job_ids = [job.job_id for job in old_jobs]
-        deleted_count = session.query(db.RefinementJobORM).filter(
-            db.RefinementJobORM.job_id.in_(job_ids)
-        ).delete(synchronize_session='fetch')
-
-        logger.info(f"Cleaned up {deleted_count} old job records (retention: {retention_days} days)")
+            
         return deleted_count
 
     except Exception as e:

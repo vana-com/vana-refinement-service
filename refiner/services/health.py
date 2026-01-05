@@ -101,6 +101,42 @@ class HealthService:
             
         vana.logging.debug(f"Recorded failed refinement: {error_type} (processing time: {processing_time:.2f}s)")
             
+    def _get_database_metrics(self) -> tuple:
+        """
+        Get database file sizes.
+        
+        Returns:
+            tuple: (db_size_mb, wal_size_mb, total_size_mb)
+        """
+        try:
+            from refiner.stores.db import STORES_DB_PATH
+            from pathlib import Path
+            
+            db_path = Path(STORES_DB_PATH)
+            wal_path = db_path.with_suffix('.db-wal')
+            shm_path = db_path.with_suffix('.db-shm')
+            
+            db_size_mb = 0.0
+            wal_size_mb = 0.0
+            
+            if db_path.exists():
+                db_size_mb = db_path.stat().st_size / (1024 * 1024)
+            
+            if wal_path.exists():
+                wal_size_mb = wal_path.stat().st_size / (1024 * 1024)
+            
+            # Include shm file in total (usually small)
+            shm_size_mb = 0.0
+            if shm_path.exists():
+                shm_size_mb = shm_path.stat().st_size / (1024 * 1024)
+            
+            total_size_mb = db_size_mb + wal_size_mb + shm_size_mb
+            
+            return (round(db_size_mb, 2), round(wal_size_mb, 2), round(total_size_mb, 2))
+        except Exception as e:
+            vana.logging.debug(f"Failed to get database metrics: {e}")
+            return (None, None, None)
+
     def _get_system_metrics(self) -> SystemMetrics:
         """
         Get current system metrics safely.
@@ -125,6 +161,9 @@ class HealthService:
                 except OSError:
                     load_avg = None
             
+            # Database size metrics
+            db_size_mb, wal_size_mb, total_db_size_mb = self._get_database_metrics()
+            
             return SystemMetrics(
                 cpu_percent=cpu_percent,
                 memory_percent=memory.percent,
@@ -132,7 +171,10 @@ class HealthService:
                 disk_percent=disk.percent,
                 disk_free_gb=round(disk.free / (1024**3), 2),
                 load_average=load_avg,
-                docker_healthy=docker_healthy
+                docker_healthy=docker_healthy,
+                database_size_mb=db_size_mb,
+                database_wal_size_mb=wal_size_mb,
+                database_total_size_mb=total_db_size_mb
             )
             
         except Exception as e:
@@ -290,6 +332,22 @@ class HealthService:
                 refinement_metrics.seconds_since_last_failure = int(
                     current_time - self._last_failed_refinement
                 )
+        
+        # Get pending job stats from database (outside lock to avoid blocking)
+        try:
+            from refiner.stores import refinement_jobs_store
+            pending_stats = refinement_jobs_store.get_pending_job_stats()
+            refinement_metrics.pending_refinements = pending_stats.get("pending_count", 0)
+            refinement_metrics.processing_refinements = pending_stats.get("processing_count", 0)
+            
+            # Calculate age of oldest pending job
+            oldest_submitted = pending_stats.get("oldest_pending_submitted_at")
+            if oldest_submitted:
+                refinement_metrics.oldest_pending_job_age_seconds = int(
+                    current_time - oldest_submitted.timestamp()
+                )
+        except Exception as e:
+            vana.logging.debug(f"Failed to get pending job stats: {e}")
         
         # Get recent stats
         recent_successes, recent_failures = self._calculate_recent_stats(1)
