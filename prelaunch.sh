@@ -20,13 +20,13 @@ log_disk_state() {
     echo ""
 
     echo "--- Docker System Summary (docker system df) ---"
-    # Use non-verbose mode for fast output
-    docker system df
+    # Use non-verbose mode with timeout to avoid blocking startup
+    timeout 60 docker system df || echo "(timeout - skipping)"
     echo ""
 
     echo "--- Container sizes ---"
-    # Quick container size check - shows where storage leaks occur
-    docker ps -a --format "table {{.Names}}\t{{.Size}}\t{{.Status}}"
+    # Quick container size check with timeout (Size calculation can be slow with many containers)
+    timeout 60 docker ps -a --format "table {{.Names}}\t{{.Size}}\t{{.Status}}" || echo "(timeout - skipping)"
     echo ""
 
     echo "==================== END REPORT: $TITLE ===================="
