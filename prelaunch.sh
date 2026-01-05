@@ -45,18 +45,17 @@ perform_cleanup() {
     find /tmp -name "tmp*" -type d -mmin +60 -exec rm -rf {} +
     echo "System temporary file cleanup complete."
 
-    # 2. Prune all stopped Docker containers.
-    # This is safe to run on startup as no application containers should be running yet.
+    # 2. Prune all stopped Docker containers (timeout: 60s to avoid blocking startup)
     echo "Pruning stopped Docker containers..."
-    docker container prune -f
+    timeout 60 docker container prune -f || echo "(timeout reached - cleanup will continue at runtime)"
 
-    # 3. Prune the Docker builder cache.
+    # 3. Prune the Docker builder cache (timeout: 60s)
     echo "Pruning Docker builder cache..."
-    docker builder prune -af
+    timeout 60 docker builder prune -af || echo "(timeout reached - cleanup will continue at runtime)"
 
-    # 4. Prune dangling and unused Docker images.
+    # 4. Prune dangling and unused Docker images (timeout: 120s - images are larger)
     echo "Pruning unused images..."
-    docker image prune -af
+    timeout 120 docker image prune -af || echo "(timeout reached - cleanup will continue at runtime)"
 
     # 5. Forcefully delete orphaned 'input-*' and 'output-*' volumes.
     # The standard `docker volume prune` is not working, so we target them by name.
@@ -72,9 +71,9 @@ perform_cleanup() {
 #        echo "No orphaned 'input-*' or 'output-*' volumes found."
 #    fi
 
-    # 6. Run the standard volume prune for any other dangling volumes.
+    # 6. Run the standard volume prune for any other dangling volumes (timeout: 60s)
     echo "Pruning any other unused volumes..."
-    docker volume prune -f
+    timeout 60 docker volume prune -f || echo "(timeout reached - cleanup will continue at runtime)"
 
     echo "--- Comprehensive cleanup finished ---"
 }
