@@ -26,7 +26,8 @@ log_disk_state() {
 
     echo "--- Container sizes (sorted by size) ---"
     # Quick container size check - this is where the 1.8TB leak was found
-    docker ps -a --format "table {{.Names}}\t{{.Size}}\t{{.Status}}" | head -20
+    # Use 'head -n 20' for BusyBox compatibility (not 'head -20')
+    docker ps -a --format "table {{.Names}}\t{{.Size}}\t{{.Status}}" | head -n 20
     echo ""
 
     echo "==================== END REPORT: $TITLE ===================="
