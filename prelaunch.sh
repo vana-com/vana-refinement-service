@@ -6,6 +6,7 @@ echo "----------------------------------------------"
 set -e
 
 # Function to log the current state of disk usage for diagnostics.
+# Optimized for fast startup - only essential metrics, no slow scans.
 log_disk_state() {
     TITLE=$1
     echo ""
@@ -18,19 +19,14 @@ log_disk_state() {
     df -h
     echo ""
 
-    echo "--- Docker System-Wide Usage (docker system df -v) ---"
-    # Use -v for verbose output to see all items, not just reclaimable space.
-    docker system df -v
+    echo "--- Docker System Summary (docker system df) ---"
+    # Use non-verbose mode for fast output
+    docker system df
     echo ""
 
-    echo "--- Top 20 Largest Items in /var/lib/docker (du) ---"
-    echo "(This may take a moment...)"
-    # This command finds the largest files/directories, helping to pinpoint the exact source of bloat.
-    du -ah /var/lib/docker 2>/dev/null | sort -rh | head -n 20
-    echo ""
-
-    echo "--- Summary of /tmp directory usage ---"
-    du -sh /tmp
+    echo "--- Container sizes ---"
+    # Quick container size check - shows where storage leaks occur
+    docker ps -a --format "table {{.Names}}\t{{.Size}}\t{{.Status}}"
     echo ""
 
     echo "==================== END REPORT: $TITLE ===================="
@@ -64,17 +60,17 @@ perform_cleanup() {
 
     # 5. Forcefully delete orphaned 'input-*' and 'output-*' volumes.
     # The standard `docker volume prune` is not working, so we target them by name.
-    echo "Searching for and forcefully deleting orphaned 'input-*' and 'output-*' volumes..."
-    ORPHANED_VOLUMES=$(docker volume ls -q | grep -E '^(input-|output-)')
-    if [ -n "$ORPHANED_VOLUMES" ]; then
-        echo "Found the following orphaned volumes to delete:"
-        echo "$ORPHANED_VOLUMES"
-        # The -r flag prevents `xargs` from running `docker volume rm` if no volumes are found.
-        echo "$ORPHANED_VOLUMES" | xargs -r docker volume rm
-        echo "Orphaned volumes deleted."
-    else
-        echo "No orphaned 'input-*' or 'output-*' volumes found."
-    fi
+    echo "Temporary SKIP Searching for and forcefully deleting orphaned 'input-*' and 'output-*' volumes..."
+#    ORPHANED_VOLUMES=$(docker volume ls -q | grep -E '^(input-|output-)')
+#    if [ -n "$ORPHANED_VOLUMES" ]; then
+#        echo "Found the following orphaned volumes to delete:"
+#        echo "$ORPHANED_VOLUMES"
+#        # The -r flag prevents `xargs` from running `docker volume rm` if no volumes are found.
+#        echo "$ORPHANED_VOLUMES" | xargs -r docker volume rm
+#        echo "Orphaned volumes deleted."
+#    else
+#        echo "No orphaned 'input-*' or 'output-*' volumes found."
+#    fi
 
     # 6. Run the standard volume prune for any other dangling volumes.
     echo "Pruning any other unused volumes..."
